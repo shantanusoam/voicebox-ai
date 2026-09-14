@@ -228,3 +228,68 @@ def test_human_request_outside_a_booking_still_queues_a_task(client, make_call, 
                         json={'text': 'I would like a human', 'request_id': 'f7-human-plain-1'}).json()
     assert reply['intent'] == 'human'
     assert [t for t in db.tasks('clinic-demo') if t['status'] == 'open']
+
+
+# --- Voice-path defects found by an end-to-end run -----------------------
+
+def test_slot_selection_accepts_spoken_number_words():
+    """A caller on a phone says 'one', not '1'. Transcribed speech never
+    contains a bare digit, so a digit-only matcher stranded every voice
+    booking at slot selection."""
+    from callbox.agent import spoken_option
+    assert spoken_option('1') == 0
+    assert spoken_option('one') == 0
+    assert spoken_option('One.') == 0
+    assert spoken_option('option 3') == 2
+    assert spoken_option('number two') == 1
+    assert spoken_option('I will take four') == 3
+    assert spoken_option('ek') == 0, 'Hinglish numerals are offered in the UI'
+    assert spoken_option('teen please') == 2
+    for rejected in ('banana', '7', '0', '', 'one two'):
+        assert spoken_option(rejected) == -1, f'{rejected!r} must not select a slot'
+
+
+def test_spoken_slot_choice_books_end_to_end(client, make_call, db):
+    cid = make_call()['id']
+    for i, text in enumerate(['book tomorrow', 'one', 'Mira Demo', 'confirm']):
+        r = client.post(f'/api/calls/{cid}/turn', json={'text': text, 'request_id': f'spoken-{i}-aaaa'})
+        assert r.status_code == 200, r.text
+    booked = [a for a in db.appointments('clinic-demo') if a['status'] == 'confirmed']
+    assert len(booked) == 1 and booked[0]['name'] == 'Mira Demo'
+
+
+def test_spoken_confirmation_is_accepted_but_stays_conservative():
+    """A transcribed caller says 'yes, please confirm that booking', never the
+    bare token 'confirm'. Widening this must not weaken the guarantee that
+    only an unambiguous yes commits a booking."""
+    from callbox.agent import is_affirmative
+    for yes in ('confirm', 'yes', 'Yes, please confirm that booking', 'haan',
+                'go ahead', 'ok', 'book it', "that's right"):
+        assert is_affirmative(yes), f'{yes!r} should confirm'
+    for no in ("no, don't confirm", 'not yet', 'cancel that', 'wait, change the time',
+               'yes but not that one', 'maybe', 'I am not sure', '', '   '):
+        assert not is_affirmative(no), f'{no!r} must NOT commit a booking'
+
+
+def test_negation_after_a_yes_never_books(client, make_call, db):
+    cid = make_call()['id']
+    for i, text in enumerate(['book tomorrow', 'one', 'Mira Demo']):
+        client.post(f'/api/calls/{cid}/turn', json={'text': text, 'request_id': f'neg-{i}-aaaa'})
+    reply = client.post(f'/api/calls/{cid}/turn',
+                        json={'text': 'yes but not that one', 'request_id': 'neg-final-aaaa'}).json()
+    assert not db.appointments('clinic-demo'), 'an ambiguous yes must not commit'
+    assert 'nothing has been booked' in reply['reply'].lower()
+
+
+def test_natural_spoken_booking_completes(client, make_call, db):
+    """The exact utterances a transcribed caller produces, end to end."""
+    cid = make_call()['id']
+    for i, text in enumerate(['I would like to book an appointment for tomorrow',
+                              'I will take option one',
+                              'My name is Mira Demo',
+                              'Yes, please confirm that booking']):
+        r = client.post(f'/api/calls/{cid}/turn', json={'text': text, 'request_id': f'voice-{i}-aaaa'})
+        assert r.status_code == 200, r.text
+    booked = [a for a in db.appointments('clinic-demo') if a['status'] == 'confirmed']
+    assert len(booked) == 1, 'the natural voice phrasing must reach a committed booking'
+    assert booked[0]['name'] == 'Mira Demo'

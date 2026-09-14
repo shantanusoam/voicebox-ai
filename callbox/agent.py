@@ -18,6 +18,24 @@ HUMAN = re.compile(r'\b(human|person|staff|receptionist|callback|call back|docto
 YES = {'yes','yes please','confirm','confirmed','haan','ha','ji','book it','confirm booking'}
 NO = {'no','nahi','cancel','stop','never mind','nevermind'}
 
+# Spoken confirmation. Deliberately anchored at the start of the utterance and
+# refused outright when any negation is present, so "no, don't confirm" and
+# "not yet" can never book. A transcribed caller says "yes, please confirm
+# that booking", never the bare token "confirm".
+AFFIRMATIVE = re.compile(
+    r"^(?:yes|yeah|yep|yup|sure|ok|okay|correct|right|haan|ha|ji|thik hai|theek hai|"
+    r"please\s+confirm|confirm(?:ed)?|book\s+it|go\s+ahead|that(?:'s| is)\s+right)\b", re.I)
+NEGATION = re.compile(
+    r"\b(?:no|not|n't|dont|don't|never|cancel|stop|wait|hold on|change|different|nahi)\b", re.I)
+
+
+def is_affirmative(text):
+    """True only for an unambiguous spoken yes with no negation anywhere."""
+    cleaned = text.strip().strip('.!?,')
+    if not cleaned or NEGATION.search(cleaned):
+        return False
+    return cleaned.lower() in YES or bool(AFFIRMATIVE.match(cleaned))
+
 
 def infer_date(text):
     today = datetime.now(IST).date()
@@ -27,6 +45,43 @@ def infer_date(text):
     if re.search(r'\b(tomorrow|kal)\b', text, re.I): return str(today + timedelta(days=1))
     if re.search(r'\b(today|aaj)\b', text, re.I): return str(today)
     return None
+
+
+# A caller on a phone says "one", not "1". Transcribed speech never contains
+# a bare digit, so a digit-only matcher strands every voice booking at slot
+# selection. Hinglish numerals are included for the same reason.
+OPTION_WORDS = {
+    'one': 1, 'first': 1, 'ek': 1, 'pehla': 1,
+    'two': 2, 'second': 2, 'do': 2, 'dusra': 2,
+    'three': 3, 'third': 3, 'teen': 3, 'tisra': 3,
+    'four': 4, 'fourth': 4, 'char': 4, 'char': 4,
+    'five': 5, 'fifth': 5, 'paanch': 5, 'panch': 5,
+    'six': 6, 'sixth': 6, 'chhe': 6, 'che': 6,
+}
+
+
+LEADING_FILLER = re.compile(
+    r"^(?:option|number|slot|choice|the|a|"
+    r"i(?:'ll| will| would like to| want to)?\s+(?:take|want|choose|pick|go with|have)|"
+    r"give me|let(?:'s| us)\s+do|make it|put me down for|yes[,\s]+)\s*", re.I)
+TRAILING_FILLER = re.compile(r"\s*(?:please|thanks|thank you|for me)$", re.I)
+
+
+def spoken_option(text):
+    """Zero-based slot index from a digit or a spoken number word, else -1.
+
+    Prefixes are stripped repeatedly, because a caller stacks them:
+    "I will take option one" needs both the verb phrase and "option" removed.
+    """
+    cleaned = text.strip().strip('.!?,').lower()
+    for _ in range(4):
+        stripped = TRAILING_FILLER.sub('', LEADING_FILLER.sub('', cleaned)).strip()
+        if stripped == cleaned:
+            break
+        cleaned = stripped
+    if re.fullmatch(r'[1-6]', cleaned):
+        return int(cleaned) - 1
+    return OPTION_WORDS[cleaned] - 1 if cleaned in OPTION_WORDS else -1
 
 
 def local_intent(text):
@@ -157,8 +212,7 @@ class Agent:
             return pick_date(date_hint), actions
 
         if state.get('step') == 'slot':
-            match = re.fullmatch(r'(?:option\s*)?([1-6])', text, re.I)
-            selected = int(match.group(1))-1 if match else -1
+            selected = spoken_option(text)
             if selected < 0 or selected >= len(state['slots']):
                 return ('Please choose a displayed option number, or say cancel to start again.', actions)
             state['chosen'] = state['slots'][selected]
@@ -174,7 +228,7 @@ class Agent:
             return (f"Please confirm: {name}, {state['date']} at {state['chosen']['label']} India time. Say confirm to book in this local test calendar, or cancel.", actions)
 
         if state.get('step') == 'confirm':
-            if text.lower().strip(' .!') not in YES:
+            if not is_affirmative(text):
                 return ('Say confirm to make this exact local booking, or cancel. Nothing has been booked yet.', actions)
             try:
                 apt = self.db.book(workspace, cid, state['name'], state['chosen']['starts_at'])

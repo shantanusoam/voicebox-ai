@@ -43,6 +43,11 @@ def completion(content, cost=0.0001):
     return {'choices': [{'message': {'content': content}}], 'usage': {'cost': cost}}
 
 
+def transcript(text, present=True, cost=0.0001):
+    """Transcription now returns a structured object, not bare text."""
+    return completion(json.dumps({'transcript': text, 'speech_present': present}), cost)
+
+
 # --- selection -----------------------------------------------------------
 
 def test_build_provider_honours_the_configured_kind(config):
@@ -76,35 +81,36 @@ def test_transcription_uses_chat_completions_with_an_audio_part(orconfig):
     def handle(request):
         seen.append(json.loads(request.content))
         assert request.url.path == '/api/v1/chat/completions'
-        return httpx.Response(200, json=completion('Book tomorrow'))
+        return httpx.Response(200, json=transcript('Book tomorrow'))
 
     text = asyncio.run(provider(orconfig, handle).transcribe(speech_wav(), 'audio/wav'))
     assert text == 'Book tomorrow'
     body = seen[0]
     assert body['model'] == orconfig.openrouter_stt_model
     assert body['reasoning'] == {'effort': 'low'}, 'reasoning tokens dominated measured cost'
-    parts = body['messages'][0]['content']
+    assert body['response_format']['json_schema']['strict'] is True, 'extraction, not conversation'
+    parts = body['messages'][-1]['content']
     assert parts[1]['type'] == 'input_audio' and parts[1]['input_audio']['format'] == 'wav'
 
 
 def test_silence_fails_closed_instead_of_confabulating(orconfig):
     """A chat model asked to transcribe a tone returns invented words, so the
     empty-string check alone can never fire. The sentinel must."""
-    p = provider(orconfig, lambda r: httpx.Response(200, json=completion(NO_SPEECH)))
+    p = provider(orconfig, lambda r: httpx.Response(200, json=transcript('', present=False)))
     with pytest.raises(AppError) as e:
         asyncio.run(p.transcribe(speech_wav(), 'audio/wav'))
     assert e.value.code == 'no_speech'
 
 
 def test_blank_transcript_still_fails_closed(orconfig):
-    p = provider(orconfig, lambda r: httpx.Response(200, json=completion('   ')))
+    p = provider(orconfig, lambda r: httpx.Response(200, json=transcript('   ')))
     with pytest.raises(AppError) as e:
         asyncio.run(p.transcribe(speech_wav(), 'audio/wav'))
     assert e.value.code == 'no_speech'
 
 
 def test_overlong_transcript_rejected(orconfig):
-    p = provider(orconfig, lambda r: httpx.Response(200, json=completion('x' * 2100)))
+    p = provider(orconfig, lambda r: httpx.Response(200, json=transcript('x' * 2100)))
     with pytest.raises(AppError) as e:
         asyncio.run(p.transcribe(speech_wav(), 'audio/wav'))
     assert e.value.code == 'transcript_too_long'
@@ -148,6 +154,14 @@ def test_speech_streams_and_returns_a_wav(orconfig):
     assert seen[0]['stream'] is True, 'OpenRouter refuses audio output without stream:true'
     assert seen[0]['audio']['format'] == 'pcm16'
     assert seen[0]['modalities'] == ['text', 'audio']
+    # The reply text must be delimited inside one instruction turn. Passed as a
+    # bare user message, a conversational audio model answers it instead of
+    # voicing it, so the caller hears a different sentence than the one the
+    # agent committed to the transcript.
+    sent = seen[0]['messages']
+    assert len(sent) == 1 and sent[0]['role'] == 'user'
+    assert '<speak>Your appointment is confirmed.</speak>' in sent[0]['content']
+    assert 'word for word' in sent[0]['content']
 
 
 def test_speech_without_audio_fails_closed(orconfig):
@@ -209,7 +223,7 @@ def test_silence_is_refused_before_any_paid_request(orconfig):
 
     def handle(request):
         calls.append(request)
-        return httpx.Response(200, json=completion('The company headquarter is in Washington DC.'))
+        return httpx.Response(200, json=transcript('The company headquarter is in Washington DC.'))
 
     p = provider(orconfig, handle)
     with pytest.raises(AppError) as e:
@@ -219,7 +233,7 @@ def test_silence_is_refused_before_any_paid_request(orconfig):
 
 
 def test_audible_speech_passes_the_silence_gate(orconfig):
-    p = provider(orconfig, lambda r: httpx.Response(200, json=completion('book tomorrow')))
+    p = provider(orconfig, lambda r: httpx.Response(200, json=transcript('book tomorrow')))
     assert asyncio.run(p.transcribe(speech_wav(), 'audio/wav')) == 'book tomorrow'
 
 

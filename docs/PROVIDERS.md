@@ -43,6 +43,33 @@ These were established by probing the live API, not by reading a table:
 `speak()` returns 24 kHz mono PCM16 in a WAV container; the gateway resamples
 to the 16 kHz device contract.
 
+### The TTS model answers text instead of reading it
+
+`openai/gpt-audio-mini` is a conversational audio model, not a narrator. Given
+the reply text as a plain user message it **responds** to it. Asked to say the
+agent's own line *"Which date would you like?"* it spoke *"I'm here to help!
+Could you give me a bit more detail…"* - so the caller hears a different
+sentence than the one written to the transcript.
+
+Two things fix it, and the second is counter-intuitive:
+
+- The text must be delimited inside a single explicit instruction turn
+  (`<speak>…</speak>`), not passed as a bare user message.
+- **Do not add a system message.** Framing the model as a TTS engine via a
+  system role made narration *worse* (1/4 phrases narrated, versus 4/4 with a
+  single instruction turn), because the system role reinforces the assistant
+  framing it is meant to suppress.
+
+Keep prosody guidance out of that instruction. With a short payload the model
+reads the guidance aloud too: "Speak calmly, with short pauses" produced the
+spoken output *"confirm short pause short pause short pause"*.
+
+A related limit affects any single-word payload: asked to voice just `1`, the
+model prepends an acknowledgement ("Understood. I will read it exactly as you
+requested. Here is the text: 1."). Agent replies are full sentences, so this
+does not arise in the product, but it does make a TTS-generated test caller
+unreliable for short utterances.
+
 ### Transcription cannot be trusted to report silence
 
 A chat model asked to transcribe a silent or non-speech clip **invents a
@@ -67,6 +94,12 @@ depend on the model:
 - **A `NO_SPEECH` sentinel** in the transcription prompt, mapped to the
   existing `no_speech` error. It works when the model complies; the gate covers
   when it does not.
+
+Transcription accuracy is also not neutral across fields. In an end-to-end
+run the caller's name "Mira Demo" was heard as "Miran Demo" and committed to
+the booking verbatim. Names are exactly what speech recognition gets wrong,
+and this release writes the transcript straight into the appointment row. A
+pilot needs name confirmation or spelling readback before that row is trusted.
 
 The RMS gate only applies to WAV input, which is the gateway path. Compressed
 browser uploads (WebM/MP4/OGG) cannot be inspected without a decoder, so they
