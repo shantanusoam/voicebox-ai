@@ -6,14 +6,21 @@ deterministic backend the typed console uses.
 import pytest
 from callbox.config import Config
 from callbox.db import Database
-from callbox.realtime import TOOLS, INSTRUCTIONS, RealtimeSession
+from callbox.realtime import INSTRUCTIONS, RealtimeSession
+
+
+import asyncio
 
 
 @pytest.fixture
 def session(config, db):
     config.api_key = 'realtime-test-not-a-real-key'
     call = db.new_call('clinic-demo', 'Realtime caller', provider='openai', consent=True)
-    return RealtimeSession(db, None, config, 'clinic-demo', call['id'])
+    session = RealtimeSession(db, None, config, 'clinic-demo', call['id'])
+    # dispatch is async now that every call goes through the orchestrator.
+    session.dispatch = lambda name, args: asyncio.run(
+        RealtimeSession.dispatch(session, name, args))
+    return session
 
 
 def test_realtime_requires_an_openai_key(config):
@@ -64,6 +71,11 @@ def test_hold_validates_the_name(session):
     assert result['error'] == 'name'
 
 
+def test_the_model_cannot_reach_a_tool_the_phase_does_not_publish(session):
+    published = {t['name'] for t in session.orchestrator.published('reception')}
+    assert 'cancel_my_appointment' not in published
+
+
 def test_reads_come_from_the_database(session, db):
     db.set_settings('clinic-demo', {**db.settings('clinic-demo'), 'fee': 777, 'open_hour': 9})
     assert session.dispatch('get_fee', {})['fee_inr'] == 777
@@ -91,10 +103,10 @@ def test_tool_failures_never_raise(session):
         assert isinstance(result, dict)
 
 
-def test_every_tool_is_declared_to_the_model(session):
-    declared = {t['name'] for t in TOOLS}
-    for name in declared:
-        assert session.dispatch(name, {}) is not None, f'{name} is declared but not handled'
+def test_every_published_tool_is_handled(session):
+    for schema in session.orchestrator.published('*'):
+        assert session.dispatch(schema['name'], {}) is not None, \
+            f"{schema['name']} is published to the model but not handled"
 
 
 def test_instructions_forbid_the_unimplemented_capabilities():

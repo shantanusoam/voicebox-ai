@@ -5,10 +5,10 @@
   "frames": 100,
   "exact_matches": 100,
   "bytes": 64000,
-  "p50_ms": 0.252,
-  "p95_ms": 0.404,
+  "p50_ms": 0.352,
+  "p95_ms": 0.436,
   "interrupt_acknowledged": true,
   "text_tools_worked": true,
-  "call_id": "call_8efa6f20b8164ddfba",
+  "call_id": "call_32c9e781ebff48c183",
   "temporary_credentials_revoked": true
 }

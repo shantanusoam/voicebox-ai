@@ -25,6 +25,7 @@ from websockets.asyncio.client import connect
 
 from .db import IST
 from .errors import AppError
+from .orchestrator import Orchestrator, ToolContext
 
 REALTIME_URL = 'wss://api.openai.com/v1/realtime'
 
@@ -52,117 +53,31 @@ Rules you must never break:
 Style: brief, warm, one question at a time. Spell names back before booking.
 Today is {today} in Asia/Kolkata. This is a test system using fictional data."""
 
-TOOLS = [
-    {'type': 'function', 'name': 'get_business_hours',
-     'description': 'Opening hours for this business. Call before stating any hours.',
-     'parameters': {'type': 'object', 'properties': {}, 'required': []}},
-    {'type': 'function', 'name': 'get_fee',
-     'description': 'The consultation fee. Call before stating any price.',
-     'parameters': {'type': 'object', 'properties': {}, 'required': []}},
-    {'type': 'function', 'name': 'get_location',
-     'description': 'The address. Call before stating any address.',
-     'parameters': {'type': 'object', 'properties': {}, 'required': []}},
-    {'type': 'function', 'name': 'get_available_slots',
-     'description': 'Real free appointment times for a date. Never guess availability.',
-     'parameters': {'type': 'object',
-                    'properties': {'date': {'type': 'string',
-                                            'description': 'YYYY-MM-DD in Asia/Kolkata'}},
-                    'required': ['date']}},
-    {'type': 'function', 'name': 'hold_slot',
-     'description': ('Stage a booking for confirmation. This does NOT book. After calling it, '
-                     'read the details back to the caller and wait for a clear yes.'),
-     'parameters': {'type': 'object',
-                    'properties': {'starts_at': {'type': 'string',
-                                                 'description': 'Exact starts_at from get_available_slots'},
-                                   'name': {'type': 'string', 'description': "Caller's name for the booking"}},
-                    'required': ['starts_at', 'name']}},
-    {'type': 'function', 'name': 'confirm_booking',
-     'description': ('Commit the held booking. Call ONLY after the caller clearly confirmed the '
-                     'date, time and name you read back. Rechecks availability and may fail.'),
-     'parameters': {'type': 'object', 'properties': {}, 'required': []}},
-    {'type': 'function', 'name': 'create_staff_request',
-     'description': ('Queue a request for a human. Use for anything clinical, any emergency, any '
-                     'request for a person, and anything you cannot handle. This is not a '
-                     'transfer and does not place a call.'),
-     'parameters': {'type': 'object',
-                    'properties': {'reason': {'type': 'string'}},
-                    'required': ['reason']}},
-]
+
 
 
 class RealtimeSession:
     """Bridges one browser socket to one upstream Realtime conversation."""
 
-    def __init__(self, db, agent, config, workspace, call_id):
+    def __init__(self, db, agent, config, workspace, call_id, channel='browser',
+                 orchestrator=None):
         self.db, self.agent, self.config = db, agent, config
         self.workspace, self.call_id = workspace, call_id
-        self.held = None          # staged booking, awaiting explicit confirmation
+        self.orchestrator = orchestrator or Orchestrator(db, config)
+        self.context = ToolContext(workspace=workspace, call_id=call_id, channel=channel)
         self.tool_log = []        # what the model actually invoked
+        self.greeted = False
         self.started = time.monotonic()
 
     # -- tools ---------------------------------------------------------
     def settings(self):
         return self.db.settings(self.workspace)
 
-    def dispatch(self, name, arguments):
-        """Run one tool against the deterministic backend. Never raises."""
-        try:
-            result = self._dispatch(name, arguments or {})
-            ok = True
-        except AppError as error:
-            result, ok = {'error': error.code, 'message': error.message}, False
-        except Exception:
-            result, ok = {'error': 'tool_failed',
-                          'message': 'That action could not be completed.'}, False
-        self.tool_log.append({'tool': name, 'ok': ok, 'result': result})
+    async def dispatch(self, name, arguments):
+        """Everything the model asks for goes through policy, never around it."""
+        result = await self.orchestrator.execute(name, arguments or {}, self.context)
+        self.tool_log.append({'tool': name, 'ok': not result.get('error'), 'result': result})
         return result
-
-    def _dispatch(self, name, args):
-        settings = self.settings()
-        if name == 'get_business_hours':
-            return {'open_hour': settings['open_hour'], 'close_hour': settings['close_hour'],
-                    'timezone': 'Asia/Kolkata',
-                    'note': 'Holiday exceptions are not configured in this demo.'}
-        if name == 'get_fee':
-            return {'fee_inr': settings['fee'], 'note': 'Demo figure, not a real quote.'}
-        if name == 'get_location':
-            return {'address': settings['address'], 'note': 'No map or message has been sent.'}
-        if name == 'get_available_slots':
-            slots = self.db.slots(self.workspace, str(args.get('date', ''))[:10])[:6]
-            return {'date': args.get('date'), 'slots': slots,
-                    'note': 'Availability is not a reservation. Use hold_slot then confirm_booking.'}
-        if name == 'hold_slot':
-            starts_at = str(args.get('starts_at', ''))
-            caller = str(args.get('name', '')).strip()
-            if not 2 <= len(caller) <= 80:
-                raise AppError(422, 'name', 'Ask the caller for a name of 2 to 80 characters.')
-            available = self.db.slots(self.workspace, starts_at[:10])
-            slot = next((s for s in available if s['starts_at'] == starts_at), None)
-            if not slot:
-                raise AppError(409, 'slot_unavailable',
-                               'That time is not available. Offer the caller the current slots.')
-            self.held = {'starts_at': starts_at, 'name': caller, 'label': slot['label']}
-            return {'held': True, 'booked': False, 'name': caller, 'date': starts_at[:10],
-                    'time': slot['label'],
-                    'next': 'Read this back to the caller and wait for a clear yes, '
-                            'then call confirm_booking.'}
-        if name == 'confirm_booking':
-            if not self.held:
-                raise AppError(409, 'nothing_held',
-                               'Nothing is staged. Call hold_slot first.')
-            # Commits transactionally and rechecks availability at commit time.
-            appointment = self.db.book(self.workspace, self.call_id,
-                                       self.held['name'], self.held['starts_at'])
-            booked, self.held = dict(appointment), None
-            return {'committed': True, 'appointment': booked,
-                    'note': 'Local calendar only. No SMS, WhatsApp or external calendar message '
-                            'has been sent.'}
-        if name == 'create_staff_request':
-            reason = str(args.get('reason', 'Caller requested assistance'))[:200]
-            task = self.db.task(self.workspace, self.call_id, reason)
-            return {'queued': True, 'id': task['id'],
-                    'note': 'A staff review request. Not a transfer, and no call was placed.'}
-        raise AppError(422, 'unknown_tool', 'That action does not exist.')
 
     # -- upstream ------------------------------------------------------
     def session_config(self):
@@ -182,7 +97,7 @@ class RealtimeSession:
             'instructions': INSTRUCTIONS.format(
                 business=self.settings()['name'],
                 today=datetime.now(IST).strftime('%A, %d %B %Y')),
-            'tools': TOOLS,
+            'tools': self.orchestrator.published(self.context.phase),
             'tool_choice': 'auto',
         }}
 
@@ -242,7 +157,10 @@ async def pump_model_to_browser(upstream, session, on_event):
             await on_event({'type': 'assistant.delta', 'text': event.get('delta', '')})
         elif kind == 'response.output_audio_transcript.done':
             text = (event.get('transcript') or '').strip()
-            if text:
+            if text and not session.greeted:
+                # agent.start() already recorded the greeting; do not duplicate it.
+                session.greeted = True
+            elif text:
                 session.db.message(session.call_id, 'assistant', text)
                 await on_event({'type': 'assistant.done', 'text': text})
         elif kind == 'conversation.item.input_audio_transcription.completed':
@@ -263,8 +181,16 @@ async def pump_model_to_browser(upstream, session, on_event):
                 args = json.loads(raw_args)
             except ValueError:
                 args = {}
-            result = session.dispatch(name, args)
+            before = session.context.phase
+            result = await session.dispatch(name, args)
             await on_event({'type': 'tool', 'tool': name, 'result': result})
+            if session.context.phase != before:
+                # Dynamic tool routing: publish the next phase's tools before
+                # the model plans its following turn.
+                await upstream.send(json.dumps({'type': 'session.update', 'session': {
+                    'type': 'realtime',
+                    'tools': session.orchestrator.published(session.context.phase)}}))
+                await on_event({'type': 'phase', 'phase': session.context.phase})
             await upstream.send(json.dumps({'type': 'conversation.item.create', 'item': {
                 'type': 'function_call_output', 'call_id': call_id,
                 'output': json.dumps(result, default=str)}}))
@@ -279,9 +205,10 @@ async def pump_model_to_browser(upstream, session, on_event):
             await on_event({'type': 'turn.done'})
 
 
-async def run(browser, db, agent, config, workspace, call_id, greeting):
+async def run(browser, db, agent, config, workspace, call_id, greeting,
+              channel='browser', orchestrator=None):
     """Own one realtime conversation until either side hangs up."""
-    session = RealtimeSession(db, agent, config, workspace, call_id)
+    session = RealtimeSession(db, agent, config, workspace, call_id, channel, orchestrator)
     send_lock = asyncio.Lock()
 
     async def emit(payload):
@@ -308,4 +235,5 @@ async def run(browser, db, agent, config, workspace, call_id, greeting):
         for task in done:
             with contextlib.suppress(asyncio.CancelledError):
                 task.result()
+    session.orchestrator.release(call_id)
     return session.tool_log

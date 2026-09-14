@@ -27,6 +27,7 @@ from callbox.config import Config                 # noqa: E402
 from callbox.db import Database                   # noqa: E402
 from callbox.errors import AppError               # noqa: E402
 from callbox.providers import build_provider      # noqa: E402
+from callbox.orchestrator import Orchestrator     # noqa: E402
 from callbox.telephony import AudioSocketLeg      # noqa: E402
 
 
@@ -35,6 +36,8 @@ class Bridge:
         self.config = config
         self.db = Database(config.data_dir / 'callbox.db', config.workspace, config.demo)
         self.agent = Agent(self.db, config, build_provider(config))
+        # One registry shared by every call; per-call state lives in ToolContext.
+        self.orchestrator = Orchestrator(self.db, config)
         self.calls = 0
 
     async def handle(self, reader, writer):
@@ -51,7 +54,8 @@ class Bridge:
             greeting = call['messages'][0]['text']
             print(f'[call {index}] call_id={call["id"]}', flush=True)
             tools = await realtime.run(leg, self.db, self.agent, self.config,
-                                       self.config.workspace, call['id'], greeting)
+                                       self.config.workspace, call['id'], greeting,
+                                       channel='sip', orchestrator=self.orchestrator)
             print(f'[call {index}] tools used: {[t["tool"] for t in tools]}', flush=True)
         except AppError as error:
             print(f'[call {index}] {error.code}: {error.message}', flush=True)
