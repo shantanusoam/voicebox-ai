@@ -1,13 +1,22 @@
 name: CallBox checks
+
 on: [push, pull_request]
+
 permissions:
   contents: read
+
 jobs:
   verify:
+    name: Pipeline (L0-L7)
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     env:
+      # No provider credentials in CI. The paid paths stay disabled; the
+      # provider adapters are covered by mocked contract tests, and the live
+      # smoke test is opt-in and run by hand.
+      CALLBOX_PROVIDER: "none"
       OPENAI_API_KEY: ""
+      OPENROUTER_API_KEY: ""
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -18,8 +27,34 @@ jobs:
         with:
           node-version: '22'
       - run: python -m pip install -r requirements-dev.txt
-      - run: python -m pytest -q
-      - run: python scripts/build.py
-      - run: make -C firmware test
+      - name: Run every layer gate
+        run: python scripts/verify.py
+      - name: Upload pipeline report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-report
+          path: |
+            qa/verify-report.json
+            qa/verify-loopback.json
+            evals/out/scorecard.json
+            evals/out/scorecard.md
+          if-no-files-found: warn
+
+  browser:
+    name: Browser smoke (L8)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CALLBOX_PROVIDER: "none"
+      OPENAI_API_KEY: ""
+      OPENROUTER_API_KEY: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+          cache: pip
+      - run: python -m pip install -r requirements-dev.txt
       - run: python -m playwright install --with-deps chromium
-      - run: python scripts/browser_smoke.py
+      - run: python scripts/verify.py --only browser

@@ -9,7 +9,12 @@
     "start": "node scripts/dev.mjs",
     "check": "node --check web/app/app.js && node --check web/site/app.mjs",
     "test": "python -m pytest -q",
-    "build": "python scripts/build.py"
+    "build": "python scripts/build.py",
+    "verify": "python scripts/verify.py",
+    "verify:browser": "python scripts/verify.py --with-browser",
+    "evals": "python evals/runner.py --report"
   },
-  "engines": {"node": ">=18"}
+  "engines": {
+    "node": ">=18"
+  }
 }

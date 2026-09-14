@@ -1,0 +1,14 @@
+{
+  "kind": "native-python-network-loopback",
+  "hardware_verified": false,
+  "phone_call_placed": false,
+  "frames": 100,
+  "exact_matches": 100,
+  "bytes": 64000,
+  "p50_ms": 0.371,
+  "p95_ms": 0.469,
+  "interrupt_acknowledged": true,
+  "text_tools_worked": true,
+  "call_id": "call_25750da2d84d4936a4",
+  "temporary_credentials_revoked": true
+}
