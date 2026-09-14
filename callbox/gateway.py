@@ -7,8 +7,12 @@ import hashlib
 import re
 import time
 from fastapi import WebSocket, WebSocketDisconnect
-from .audio import AudioBuffer, FRAME_BYTES, SAMPLE_RATE, to_wav, wav_to_pcm16
+from .audio import AudioBuffer, FRAME_BYTES, SAMPLE_RATE, to_wav, resample_async
 from .errors import AppError
+
+
+AUTH_RECHECK_SECONDS = 5
+TOUCH_FLUSH_SECONDS = 1
 
 
 class Gateway:
@@ -33,6 +37,7 @@ class Gateway:
         await ws.accept()
         did = workspace = cid = None
         own_connection = False
+        pending_frames = 0
         generation_task = None
         buffer = AudioBuffer()
         mode = 'echo'
@@ -61,7 +66,7 @@ class Gateway:
                 if buffer.epoch != epoch: return
                 await send({'type':'turn.result','call_id':call_id,'epoch':epoch, **result})
                 wav = await self.provider.speak(result['reply'], wav=True)
-                output = wav_to_pcm16(wav)
+                output = await resample_async(wav)
                 for index, start in enumerate(range(0, len(output), FRAME_BYTES)):
                     if buffer.epoch != epoch: return
                     frame = output[start:start+FRAME_BYTES].ljust(FRAME_BYTES, b'\0')
@@ -89,16 +94,27 @@ class Gateway:
                         'frame_bytes':FRAME_BYTES,'max_turn_ms':15000,'hardware_verified':False})
             connected_at = time.monotonic()
             window, count = time.monotonic(), 0
+            # Re-authenticating and touching the device on every message meant
+            # two SQLite statements per 20 ms frame (~100/s/device) on the lock
+            # shared with the HTTP API. Revocation still disconnects
+            # immediately via revoke(); this bounds the out-of-band window.
+            checked_at = time.monotonic()
+            flushed_at = time.monotonic()
             while True:
                 message = await self.receive(ws)
-                if time.monotonic() - window >= 1: window, count = time.monotonic(), 0
+                now = time.monotonic()
+                if now - window >= 1: window, count = now, 0
                 count += 1
                 if count > 150: raise AppError(429, 'message_rate', 'Gateway message rate exceeded.')
-                if time.monotonic() - connected_at > self.config.max_call_seconds:
+                if now - connected_at > self.config.max_call_seconds:
                     raise AppError(409, 'gateway_expired', 'Lab connection duration limit reached.')
-                if not self.db.authenticate_device(hello.get('token'), did):
-                    raise AppError(401, 'device_auth', 'Device credentials were revoked.')
-                self.db.touch_device(did)
+                if now - checked_at >= AUTH_RECHECK_SECONDS:
+                    checked_at = now
+                    if not self.db.authenticate_device(hello.get('token'), did):
+                        raise AppError(401, 'device_auth', 'Device credentials were revoked.')
+                if now - flushed_at >= TOUCH_FLUSH_SECONDS:
+                    flushed_at = now
+                    self.db.touch_device(did, frames=pending_frames); pending_frames = 0
                 kind = message.get('type')
                 try:
                     if kind == 'ping':
@@ -117,7 +133,7 @@ class Gateway:
                     if message.get('call_id') != cid: raise AppError(409, 'wrong_call', 'Message is not for the active call.')
                     if kind == 'audio':
                         pcm = buffer.add(message)
-                        self.db.touch_device(did, frames=1)
+                        pending_frames += 1
                         if mode == 'echo':
                             buffer.take()
                             await send({'type':'audio.output','call_id':cid,'epoch':buffer.epoch,
@@ -165,5 +181,6 @@ class Gateway:
                 self.agent.locks.pop(cid, None)
             if did and own_connection:
                 self.connections.pop(did, None)
-                self.db.touch_device(did, online=False)
+                # Flush the batched frame count before going offline.
+                self.db.touch_device(did, online=False, frames=pending_frames)
                 self.db.event(workspace, 'device.disconnected', 'Lab gateway disconnected')

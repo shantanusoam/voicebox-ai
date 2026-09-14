@@ -3,6 +3,7 @@
 Each test fails on the baseline commit and passes after its fix.
 """
 import asyncio
+import base64
 import os
 import stat
 import pytest
@@ -110,3 +111,76 @@ def test_runtime_directory_is_not_world_readable(tmp_path, monkeypatch):
     assert not mode & 0o077, f'.runtime is group/world accessible: {mode:o}'
     token_file = config.data_dir / 'admin-token'
     assert not stat.S_IMODE(os.stat(token_file).st_mode) & 0o077
+
+
+# --- F3: resampling must not stall the event loop ------------------------
+
+def test_resample_produces_correct_rate_conversions():
+    from callbox.audio import resample_pcm16, SAMPLE_RATE
+    import array as _array
+    for rate, expected_ratio in ((48000, 1 / 3), (24000, 2 / 3), (SAMPLE_RATE, 1.0)):
+        samples = _array.array('h', [(i % 200) - 100 for i in range(rate)])
+        out = _array.array('h'); out.frombytes(resample_pcm16(samples.tobytes(), rate))
+        assert abs(len(out) - rate * expected_ratio) <= 2, f'{rate} Hz produced {len(out)} samples'
+
+
+def test_resample_does_not_block_the_event_loop():
+    """Pre-fix this ran inline in gateway.process_turn, so a long reply froze
+    every other call, the ping heartbeat and the rate window."""
+    import time as _time
+    from callbox.audio import resample_async, to_wav
+
+    # 20 s of 48 kHz audio: enough work that inline execution is obvious.
+    payload = to_wav(bytes(48000 * 2 * 20), sample_rate=48000)
+
+    async def run():
+        ticks = 0
+
+        async def heartbeat():
+            nonlocal ticks
+            while True:
+                await asyncio.sleep(0.01)
+                ticks += 1
+
+        beat = asyncio.create_task(heartbeat())
+        started = _time.perf_counter()
+        out = await resample_async(payload)
+        elapsed = _time.perf_counter() - started
+        beat.cancel()
+        return ticks, elapsed, len(out)
+
+    ticks, elapsed, size = asyncio.run(run())
+    assert size > 0
+    # The heartbeat must have kept running while the resampler worked.
+    assert ticks >= max(1, int(elapsed / 0.02)), f'loop was starved: {ticks} ticks in {elapsed:.2f}s'
+
+
+# --- F4: the gateway must not hit SQLite twice per audio frame -----------
+
+def test_gateway_batches_device_writes(client, db, monkeypatch):
+    """Frame totals must stay exact while the per-frame writes go away."""
+    import callbox.db as db_module
+    writes = []
+    original = db_module.Database.touch_device
+
+    def counting(self, did, online=True, frames=0):
+        writes.append(frames)
+        return original(self, did, online=online, frames=frames)
+
+    monkeypatch.setattr(db_module.Database, 'touch_device', counting)
+    device = client.post('/api/devices', json={'name': 'Batch test', 'kind': 'simulator'}).json()
+    frame = {'type': 'audio', 'sample_rate': 16000, 'channels': 1,
+             'pcm16': base64.b64encode(bytes(640)).decode()}
+    with client.websocket_connect('/ws/device') as ws:
+        ws.send_json({'type': 'hello', 'protocol': 'callbox.v1',
+                      'device_id': device['id'], 'token': device['token']})
+        assert ws.receive_json()['type'] == 'ready'
+        ws.send_json({'type': 'call.start', 'mode': 'echo', 'consent': True})
+        cid = ws.receive_json()['call_id']
+        for seq in range(30):
+            ws.send_json({**frame, 'call_id': cid, 'seq': seq, 'epoch': 0})
+            assert ws.receive_json()['type'] == 'audio.output'
+        ws.send_json({'type': 'call.end', 'call_id': cid})
+        assert ws.receive_json()['type'] == 'call.ended'
+    assert db.devices('clinic-demo')[0]['frames'] == 30, 'batching lost frames'
+    assert len(writes) < 30, f'still writing per frame: {len(writes)} writes for 30 frames'

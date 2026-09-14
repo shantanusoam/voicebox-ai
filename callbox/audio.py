@@ -1,4 +1,5 @@
 """Fixed PCM16/mono/16 kHz device contract and bounded turn buffers."""
+import asyncio
 from array import array
 import base64
 import binascii
@@ -37,6 +38,13 @@ def to_wav(pcm: bytes, sample_rate=SAMPLE_RATE):
 
 
 def wav_to_pcm16(wav_bytes: bytes):
+    """Decode a provider WAV to PCM16 at SAMPLE_RATE.
+
+    CPU-bound and O(samples). Call it through resample_async() from async
+    code: a 60 s 48 kHz reply is ~2.9 M samples, and running that inline
+    stalled the event loop for every other call, the gateway heartbeat and
+    the message-rate window.
+    """
     try:
         with wave.open(io.BytesIO(wav_bytes), 'rb') as wav:
             if wav.getnchannels() != 1 or wav.getsampwidth() != 2:
@@ -46,20 +54,46 @@ def wav_to_pcm16(wav_bytes: bytes):
                 raise AppError(502, 'tts_format', 'Unsupported rate or oversized generated speech.')
             data = wav.readframes(wav.getnframes())
     except (wave.Error, EOFError): raise AppError(502, 'tts_format', 'Provider response is not a PCM WAV file.')
+    return resample_pcm16(data, rate)
+
+
+def resample_pcm16(data: bytes, rate: int) -> bytes:
+    """Resample mono PCM16LE to SAMPLE_RATE.
+
+    Linear interpolation is adequate for this laboratory transport test.
+    Replace with an evaluated resampler for production voice quality.
+    """
     if rate == SAMPLE_RATE: return data
-    # Linear interpolation is adequate for this laboratory transport test.
-    # Replace with an evaluated resampler for production voice quality.
     source = array('h'); source.frombytes(data)
     if sys.byteorder != 'little': source.byteswap()
     if len(source) < 2: return b''
-    output = array('h')
-    for n in range(int(len(source)*SAMPLE_RATE/rate)):
-        index = n * rate / SAMPLE_RATE
-        left = min(int(index), len(source)-1); right = min(left+1, len(source)-1)
-        value = round(source[left] + (source[right]-source[left])*(index-left))
-        output.append(max(-32768, min(32767, value)))
+    if rate % SAMPLE_RATE == 0:
+        # Integer decimation (48k/32k -> 16k). Box-average each group so the
+        # discarded band is attenuated instead of aliased straight back in.
+        step = rate // SAMPLE_RATE
+        output = array('h', [sum(source[i:i+step]) // step
+                             for i in range(0, len(source) - step + 1, step)])
+    else:
+        # Rational rates (24k -> 16k). Hoist lookups out of the loop.
+        count = int(len(source) * SAMPLE_RATE / rate)
+        ratio = rate / SAMPLE_RATE
+        last = len(source) - 1
+        output = array('h', [0]) * count
+        for n in range(count):
+            index = n * ratio
+            left = int(index)
+            if left >= last:
+                output[n] = source[last]
+                continue
+            value = source[left] + (source[left+1] - source[left]) * (index - left)
+            output[n] = max(-32768, min(32767, round(value)))
     if sys.byteorder != 'little': output.byteswap()
     return output.tobytes()
+
+
+async def resample_async(wav_bytes: bytes) -> bytes:
+    """wav_to_pcm16 on a worker thread, so the event loop keeps serving."""
+    return await asyncio.to_thread(wav_to_pcm16, wav_bytes)
 
 
 class AudioBuffer:
