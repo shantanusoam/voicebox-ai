@@ -123,6 +123,19 @@ class Agent:
             prefix = f"{date} ko available slots" if hinglish else f'Available on {date}'
             return f'{prefix} (India time): {options}. Reply with the option number.'
 
+        # A keyword inside a name or a confirmation sentence used to discard
+        # an in-progress booking silently ("yes, and can someone call me
+        # back" cleared the state and booked nothing). Emergency still
+        # pre-empts everything; medical/human wait for the caller to finish
+        # or cancel the step that already holds their information.
+        if intent in {'medical','human'} and state.get('step') in {'name','confirm'}:
+            pending = ('Aapki booking abhi poori nahi hui hai. Pehle confirm ya cancel bol dijiye, '
+                       'phir main team ke liye message bana sakta hoon.' if hinglish else
+                       'Your booking is not finished yet. Say confirm to complete it or cancel to '
+                       'stop, and then I can raise a request for the team. Nothing has been booked '
+                       'and no request has been created yet.')
+            return (pending, actions)
+
         if intent in {'emergency','medical','human'}:
             state = {}; save()
             task = self.db.task(workspace, cid, {'emergency':'Possible emergency language - requires approved safety handling',

@@ -184,3 +184,47 @@ def test_gateway_batches_device_writes(client, db, monkeypatch):
         assert ws.receive_json()['type'] == 'call.ended'
     assert db.devices('clinic-demo')[0]['frames'] == 30, 'batching lost frames'
     assert len(writes) < 30, f'still writing per frame: {len(writes)} writes for 30 frames'
+
+
+# --- F7: intent keywords must not silently discard a booking in progress --
+
+def _advance_to_confirm(client, make_call):
+    cid = make_call()['id']
+    for i, text in enumerate(['book tomorrow', '1', 'Mira Demo']):
+        r = client.post(f'/api/calls/{cid}/turn', json={'text': text, 'request_id': f'f7-step-{i}-aaaa'})
+        assert r.status_code == 200, r.text
+    return cid
+
+
+def test_human_keyword_at_confirm_does_not_discard_the_booking(client, make_call, db):
+    cid = _advance_to_confirm(client, make_call)
+    # 'talk to' matches the HUMAN pattern, so pre-fix this cleared the state.
+    reply = client.post(f'/api/calls/{cid}/turn',
+                        json={'text': 'yes, and I would like to talk to a person too',
+                              'request_id': 'f7-human-confirm-1'}).json()
+    assert reply['intent'] == 'human'
+    assert db.call('clinic-demo', cid)['state'].get('step') == 'confirm', 'booking state was discarded'
+    assert not db.appointments('clinic-demo'), 'an ambiguous turn must not book'
+    assert not [t for t in db.tasks('clinic-demo') if t['status'] == 'open'], 'no task should be raised yet'
+    assert 'cancel' in reply['reply'].lower()
+    # The caller can still finish.
+    client.post(f'/api/calls/{cid}/turn', json={'text': 'confirm', 'request_id': 'f7-human-confirm-2'})
+    assert len(db.appointments('clinic-demo')) == 1
+
+
+def test_emergency_still_preempts_a_booking_in_progress(client, make_call, db):
+    cid = _advance_to_confirm(client, make_call)
+    reply = client.post(f'/api/calls/{cid}/turn',
+                        json={'text': 'actually I have chest pain', 'request_id': 'f7-emergency-01'}).json()
+    assert reply['intent'] == 'emergency'
+    assert db.call('clinic-demo', cid)['state'] == {}, 'emergency must clear the pending booking'
+    assert [t for t in db.tasks('clinic-demo') if t['status'] == 'open']
+    assert not db.appointments('clinic-demo')
+
+
+def test_human_request_outside_a_booking_still_queues_a_task(client, make_call, db):
+    cid = make_call()['id']
+    reply = client.post(f'/api/calls/{cid}/turn',
+                        json={'text': 'I would like a human', 'request_id': 'f7-human-plain-1'}).json()
+    assert reply['intent'] == 'human'
+    assert [t for t in db.tasks('clinic-demo') if t['status'] == 'open']
