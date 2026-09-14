@@ -44,6 +44,16 @@ class Config:
     # gpt-audio returns 24 kHz PCM16; the gateway resamples to 16 kHz.
     openrouter_tts_rate: int = 24000
     max_turn_cost_usd: float = 0.05
+    realtime_model: str = 'gpt-realtime-2.1-mini'
+    realtime_voice: str = 'alloy'
+    # The Realtime API refuses anything below 24 kHz in either direction.
+    realtime_rate: int = 24000
+    realtime_max_seconds: int = 300
+
+    @property
+    def realtime_available(self) -> bool:
+        """Realtime needs an OpenAI key specifically; OpenRouter cannot proxy it."""
+        return bool(self.api_key)
 
     @property
     def provider_configured(self) -> bool:
@@ -105,4 +115,8 @@ class Config:
                    openrouter_intent_model=os.getenv('OPENROUTER_INTENT_MODEL', 'google/gemini-3.8-flash'),
                    openrouter_tts_model=os.getenv('OPENROUTER_TTS_MODEL', 'openai/gpt-audio-mini'),
                    openrouter_voice=os.getenv('OPENROUTER_VOICE', 'alloy'),
-                   max_turn_cost_usd=max_cost)
+                   max_turn_cost_usd=max_cost,
+                   realtime_model=os.getenv('CALLBOX_REALTIME_MODEL', 'gpt-realtime-2.1-mini'),
+                   realtime_voice=os.getenv('CALLBOX_REALTIME_VOICE', 'alloy'),
+                   realtime_rate=int(os.getenv('CALLBOX_REALTIME_RATE', '24000')),
+                   realtime_max_seconds=int(os.getenv('CALLBOX_REALTIME_MAX_SECONDS', '300')))

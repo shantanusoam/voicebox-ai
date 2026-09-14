@@ -11,6 +11,7 @@ import secrets
 import time
 from urllib.parse import urlparse
 from fastapi import FastAPI, Request, WebSocket, Depends
+from fastapi import WebSocketDisconnect
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from .config import Config, ROOT
@@ -20,6 +21,7 @@ from .models import Login, NewCall, Turn, DeviceCreate, Settings, Confirmation
 from .providers import build_provider
 from .agent import Agent
 from .gateway import Gateway
+from . import realtime
 from .limits import LabGuard
 
 
@@ -128,6 +130,7 @@ def create_app(config=None, db=None, provider=None):
     @app.get('/api/workspace')
     async def info(ws=Depends(workspace)):
         return {'id':ws,'settings':db.settings(ws),'demo':config.demo,'provider_configured':config.provider_configured,'provider_kind':config.provider_kind,
+                'realtime_available':config.realtime_available,'realtime_model':config.realtime_model,
                 'provider_models':provider_models(config),
                 'calendar':'local-sqlite','telephony':'not-connected','hardware_verified':False}
 
@@ -242,6 +245,45 @@ def create_app(config=None, db=None, provider=None):
         if schedule_changed and (live or any(a['status']=='confirmed' for a in db.appointments(ws))):
             raise AppError(409,'schedule_in_use','End active tests and clear confirmed local appointments before changing the schedule.')
         return db.set_settings(ws,new)
+
+    @app.websocket('/ws/voice')
+    async def voice_socket(socket: WebSocket):
+        """Full-duplex browser voice. The provider key never leaves the server.
+
+        LabGuard has already applied the host allowlist, the origin check and
+        rate limiting to this handshake, for the websocket scope too.
+        """
+        session = db.authenticate_session(socket.cookies.get('callbox_session'))
+        if not session:
+            await socket.close(1008, 'Sign in first'); return
+        workspace_id = session['workspace']
+        if not config.realtime_available:
+            await socket.accept()
+            await socket.send_json({'type':'error','code':'realtime_not_configured',
+                                    'message':'Set OPENAI_API_KEY on the server to use realtime voice.'})
+            await socket.close(1011); return
+        await socket.accept()
+        call = None
+        try:
+            call = agent.start(workspace_id, label='Realtime voice caller', language='en',
+                               source='browser', provider='openai', consent=True)
+            greeting = call['messages'][0]['text']
+            await realtime.run(socket, db, agent, config, workspace_id, call['id'], greeting)
+        except AppError as error:
+            with contextlib.suppress(Exception):
+                await socket.send_json({'type':'error','code':error.code,'message':error.message})
+        except WebSocketDisconnect:
+            pass
+        except Exception:
+            with contextlib.suppress(Exception):
+                await socket.send_json({'type':'error','code':'realtime_failed',
+                                        'message':'The voice conversation ended unexpectedly.'})
+        finally:
+            if call:
+                with contextlib.suppress(Exception):
+                    db.end_call(workspace_id, call['id'], 'Realtime voice session ended')
+            with contextlib.suppress(Exception):
+                await socket.close()
 
     @app.websocket('/ws/device')
     async def device_socket(socket: WebSocket):

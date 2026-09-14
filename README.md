@@ -76,6 +76,22 @@ This provisions a temporary device token, sends exact PCM frames over a real Web
 
 The console also has **Devices -> Run loopback**. It sends 50 synthetic frames. Local round-trip times are software-loopback measurements, not telephone or AI conversation latency claims.
 
+## Live voice (full duplex)
+
+With an `OPENAI_API_KEY` set, the console's **Live call** panel streams your
+microphone to the server, which holds an OpenAI Realtime connection. First
+audio comes back in **~0.9 s** versus ~7.5 s for the turn-based path, and you
+can interrupt mid-sentence.
+
+The model handles speech, turn-taking and barge-in. It does **not** handle
+data: opening hours, fees, availability and every booking go through tools
+executed against the same SQLite code the typed console uses, so a booking
+still requires an explicit hold, a read-back and a confirmation, with a
+transactional availability recheck at commit. It cannot invent a slot or claim
+a booking that did not happen. See [provider setup](docs/PROVIDERS.md#realtime-voice-full-duplex).
+
+OpenRouter cannot proxy the Realtime API; this path needs an OpenAI key.
+
 ## Optional paid speech
 
 Copy `.env.example` to `.env`, set `CALLBOX_PROVIDER` to `openrouter` or

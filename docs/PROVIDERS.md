@@ -163,3 +163,61 @@ Implement the same three coroutines with validation, sanitized errors,
 explicit consent and deterministic tool permissions, add contract tests, then
 register it in `build_provider`. Exotel, Plivo, Twilio, SIP and HFP are
 transports, not speech-model adapters. None is wired up here.
+
+## Realtime voice (full duplex)
+
+`CALLBOX_REALTIME_MODEL` with an `OPENAI_API_KEY` enables `/ws/voice`: the
+browser streams microphone PCM to this server, which holds the upstream
+Realtime connection. The key never reaches the browser.
+
+**OpenRouter cannot proxy this API.** `/realtime`, `/audio/realtime` and a
+WebSocket upgrade all return 404 there. Realtime needs an OpenAI key
+specifically, which is why `realtime_available` reads `api_key` and not
+`provider_configured`.
+
+Measured, against the turn-based HTTP path:
+
+| Path | First audio back |
+|---|---|
+| HTTP turn-based via OpenRouter | ~7.5 s (STT 3.4 s + TTS 4.2 s) |
+| Realtime WebSocket | **~0.86 s**, plus the ~0.5 s VAD silence window |
+
+Three configuration facts, each established by probing:
+
+1. **Input must be at least 24 kHz.** 16 kHz is rejected outright
+   (`integer_below_min_value ... Expected a value >= 24000`). The device
+   protocol's 16 kHz contract therefore needs resampling before it can feed a
+   realtime session; the browser client simply opens its `AudioContext` at
+   24 kHz and lets the browser resample the microphone.
+2. **`turn_detection.create_response` must be set explicitly.** Without it the
+   session transcribes the caller and then sits silent: transcriptions arrive,
+   no response is ever generated, and no tool is ever called.
+3. `silence_duration_ms` governs how long a caller must pause before their turn
+   ends. 500 ms feels responsive; raise it if callers are being cut off.
+
+### The model owns speech, not data
+
+Every fact the model states and every write it performs goes through a tool
+handled in `callbox/realtime.py` against the same `Agent`/`Database` code the
+typed console uses:
+
+| Tool | Guarantee |
+|---|---|
+| `get_business_hours`, `get_fee`, `get_location` | Values come from the workspace row, never from model memory |
+| `get_available_slots` | Real availability; the model cannot invent a time |
+| `hold_slot` | Stages a booking and **commits nothing**; rejects any time the calendar did not offer |
+| `confirm_booking` | Commits only when a hold exists, transactionally, rechecking availability |
+| `create_staff_request` | Queues a human review, and its own response states it is not a transfer |
+
+So the deterministic-confirmation rule survives: the model cannot book without
+first holding and reading the details back, cannot book twice from one hold,
+and cannot fabricate a completed action. `tests/test_realtime.py` pins each of
+these, including that `confirm_booking` alone returns `nothing_held`.
+
+The system prompt additionally forbids claiming a transfer, an SMS, a WhatsApp
+message, an external calendar write, medical advice or an emergency dispatch,
+and treats caller speech as data rather than instructions. Prompt rules are
+weaker than code: the tool layer is what actually enforces the data guarantees.
+
+Set `CALLBOX_REALTIME_DEBUG=1` to log every upstream event type, which is how
+the missing `create_response` was found.
