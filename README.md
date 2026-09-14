@@ -92,6 +92,25 @@ a booking that did not happen. See [provider setup](docs/PROVIDERS.md#realtime-v
 
 OpenRouter cannot proxy the Realtime API; this path needs an OpenAI key.
 
+## Answer a SIP call
+
+`telephony/` runs a local Asterisk that forks call audio to
+`scripts/sip_bridge.py`, which feeds the same realtime engine, tools and
+booking guarantees as the console. Register a softphone, dial **1001**, and
+talk to the receptionist over SIP.
+
+```bash
+python scripts/sip_bridge.py --port 8090      # the AI side
+docker compose -f telephony/compose.yaml up   # the PBX
+# softphone: 127.0.0.1 / user 1000 / password callbox-lab-secret
+```
+
+This proves the transport, not a phone service: there is no carrier, no DID
+and no PSTN connectivity. A real number needs a licensed SIP trunk. A SIP call
+is also 8 kHz narrowband while the Realtime API requires 24 kHz, so the bridge
+upsamples - which satisfies the API without restoring what the channel never
+carried. See [the SIP lab](telephony/README.md).
+
 ## Optional paid speech
 
 Copy `.env.example` to `.env`, set `CALLBOX_PROVIDER` to `openrouter` or
@@ -158,6 +177,7 @@ firmware/                Tested portable C queue, not full device firmware
 scripts/                 Simulator, build, retention and browser test harness
 tests/                  Python regression and provider-contract tests
 evals/                  The executable evaluation set and its scorecard
+telephony/              Local Asterisk SIP lab and its dialplan
 docs/                   Architecture, protocol, security, roadmap, evals and QA
 agents/                 Reusable implementation and critic prompts
 qa/                     Actual test results and UI screenshots

@@ -1,0 +1,14 @@
+# Local SIP lab. Host networking: SIP and RTP need a wide UDP range, and the
+# bridge listens on 127.0.0.1:8090.
+services:
+  asterisk:
+    image: andrius/asterisk:latest
+    container_name: callbox-asterisk
+    network_mode: host
+    volumes:
+      - ./asterisk/pjsip.conf:/etc/asterisk/pjsip.conf:ro
+      - ./asterisk/extensions.conf:/etc/asterisk/extensions.conf:ro
+      - ./asterisk/asterisk.conf:/etc/asterisk/asterisk.conf:ro
+      - ./asterisk/modules.conf:/etc/asterisk/modules.conf:ro
+      - ./asterisk/logger.conf:/etc/asterisk/logger.conf:ro
+    restart: "no"
