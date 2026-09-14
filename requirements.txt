@@ -1,0 +1,5 @@
+fastapi==0.128.2
+uvicorn==0.48.0
+httpx==0.28.1
+websockets==16.0
+tzdata==2026.2; platform_system == "Windows"

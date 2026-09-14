@@ -1,0 +1,87 @@
+PASS Local demo sign-in is visible
+PASS Administrator token input is masked
+PASS Demo sign-in loads server-backed overview
+PASS Synthetic examples explicitly labelled
+PASS Metrics load from database
+PASS Paid provider disabled without server key
+PASS Microphone disabled in local mode
+PASS Real API session greeting is displayed
+PASS Clinic hours come from workspace settings
+PASS Available slots exposed as actionable buttons
+PASS Slot selection advances workflow
+PASS Explicit confirmation required before mutation
+PASS Confirmed booking acknowledged after API result
+PASS Conversation search filters records
+PASS Stored transcript opens in native dialog
+PASS Active session can be recovered from history
+PASS Transcript JSON export contains session data
+PASS Resume restores active conversation state
+PASS Staff request created without claiming transfer
+PASS Session ends and remains stored
+PASS Confirmed appointment appears in calendar
+PASS External calendar integration not misrepresented
+PASS Cancellation requires operator confirmation
+PASS Confirmed cancellation updates database-backed UI
+PASS Device provisioning returns one-time credential
+PASS Device secret has substantial random length
+PASS One-time token erased from DOM on close
+PASS Device can be revoked
+PASS Browser loopback verifies all 50 frames
+PASS Browser loopback exercises interruption
+PASS Loopback result does not claim hardware proof
+PASS Workspace edits are persisted and reflected in navigation
+PASS Workspace update reports no validation error
+PASS Settings show truthful provider availability
+PASS Pipeline status: bluetooth
+PASS Pipeline status: sip
+PASS Pipeline status: browser
+PASS Staff queue displays requests
+PASS Staff request can be resolved
+PASS No page overflow: overview at 320px
+PASS No page overflow: playground at 320px
+PASS No page overflow: calls at 320px
+PASS No page overflow: calendar at 320px
+PASS No page overflow: devices at 320px
+PASS No page overflow: pipeline at 320px
+PASS No page overflow: settings at 320px
+PASS No page overflow: overview at 360px
+PASS No page overflow: playground at 360px
+PASS No page overflow: calls at 360px
+PASS No page overflow: calendar at 360px
+PASS No page overflow: devices at 360px
+PASS No page overflow: pipeline at 360px
+PASS No page overflow: settings at 360px
+PASS No page overflow: overview at 390px
+PASS No page overflow: playground at 390px
+PASS No page overflow: calls at 390px
+PASS No page overflow: calendar at 390px
+PASS No page overflow: devices at 390px
+PASS No page overflow: pipeline at 390px
+PASS No page overflow: settings at 390px
+PASS No page overflow: overview at 768px
+PASS No page overflow: playground at 768px
+PASS No page overflow: calls at 768px
+PASS No page overflow: calendar at 768px
+PASS No page overflow: devices at 768px
+PASS No page overflow: pipeline at 768px
+PASS No page overflow: settings at 768px
+PASS No page overflow: overview at 1024px
+PASS No page overflow: playground at 1024px
+PASS No page overflow: calls at 1024px
+PASS No page overflow: calendar at 1024px
+PASS No page overflow: devices at 1024px
+PASS No page overflow: pipeline at 1024px
+PASS No page overflow: settings at 1024px
+PASS No page overflow: overview at 1440px
+PASS No page overflow: playground at 1440px
+PASS No page overflow: calls at 1440px
+PASS No page overflow: calendar at 1440px
+PASS No page overflow: devices at 1440px
+PASS No page overflow: pipeline at 1440px
+PASS No page overflow: settings at 1440px
+PASS Mobile navigation opens
+PASS Escape closes mobile navigation
+PASS Navigation focus restored
+PASS Escape dismisses native device dialog
+PASS No browser page errors
+{"checks_passed": 86, "errors": [], "mode": "restricted-browser relay"}

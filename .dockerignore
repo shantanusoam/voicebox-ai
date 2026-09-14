@@ -1,0 +1,9 @@
+.runtime
+.env
+.venv
+.git
+__pycache__
+.pytest_cache
+qa
+build
+*.zip

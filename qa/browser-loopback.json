@@ -1,0 +1,13 @@
+{
+  "kind": "software-loopback",
+  "timestamp": "2026-09-13T10:40:29.190Z",
+  "frames": 50,
+  "exact_matches": 50,
+  "p50_ms": 3.8,
+  "p95_ms": 4.4,
+  "hardware_verified": false,
+  "phone_call_placed": false,
+  "interrupt_acknowledged": true,
+  "device_id": "dev_0622b11be4f842e4a8",
+  "test_environment": "Python HTTP/WebSocket relay"
+}

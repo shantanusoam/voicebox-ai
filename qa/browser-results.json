@@ -1,0 +1,354 @@
+{
+  "test_mode": "restricted-browser relay",
+  "checks": [
+    {
+      "name": "Local demo sign-in is visible",
+      "passed": true
+    },
+    {
+      "name": "Administrator token input is masked",
+      "passed": true
+    },
+    {
+      "name": "Demo sign-in loads server-backed overview",
+      "passed": true
+    },
+    {
+      "name": "Synthetic examples explicitly labelled",
+      "passed": true
+    },
+    {
+      "name": "Metrics load from database",
+      "passed": true
+    },
+    {
+      "name": "Paid provider disabled without server key",
+      "passed": true
+    },
+    {
+      "name": "Microphone disabled in local mode",
+      "passed": true
+    },
+    {
+      "name": "Real API session greeting is displayed",
+      "passed": true
+    },
+    {
+      "name": "Clinic hours come from workspace settings",
+      "passed": true
+    },
+    {
+      "name": "Available slots exposed as actionable buttons",
+      "passed": true
+    },
+    {
+      "name": "Slot selection advances workflow",
+      "passed": true
+    },
+    {
+      "name": "Explicit confirmation required before mutation",
+      "passed": true
+    },
+    {
+      "name": "Confirmed booking acknowledged after API result",
+      "passed": true
+    },
+    {
+      "name": "Conversation search filters records",
+      "passed": true
+    },
+    {
+      "name": "Stored transcript opens in native dialog",
+      "passed": true
+    },
+    {
+      "name": "Active session can be recovered from history",
+      "passed": true
+    },
+    {
+      "name": "Transcript JSON export contains session data",
+      "passed": true
+    },
+    {
+      "name": "Resume restores active conversation state",
+      "passed": true
+    },
+    {
+      "name": "Staff request created without claiming transfer",
+      "passed": true
+    },
+    {
+      "name": "Session ends and remains stored",
+      "passed": true
+    },
+    {
+      "name": "Confirmed appointment appears in calendar",
+      "passed": true
+    },
+    {
+      "name": "External calendar integration not misrepresented",
+      "passed": true
+    },
+    {
+      "name": "Cancellation requires operator confirmation",
+      "passed": true
+    },
+    {
+      "name": "Confirmed cancellation updates database-backed UI",
+      "passed": true
+    },
+    {
+      "name": "Device provisioning returns one-time credential",
+      "passed": true
+    },
+    {
+      "name": "Device secret has substantial random length",
+      "passed": true
+    },
+    {
+      "name": "One-time token erased from DOM on close",
+      "passed": true
+    },
+    {
+      "name": "Device can be revoked",
+      "passed": true
+    },
+    {
+      "name": "Browser loopback verifies all 50 frames",
+      "passed": true
+    },
+    {
+      "name": "Browser loopback exercises interruption",
+      "passed": true
+    },
+    {
+      "name": "Loopback result does not claim hardware proof",
+      "passed": true
+    },
+    {
+      "name": "Workspace edits are persisted and reflected in navigation",
+      "passed": true
+    },
+    {
+      "name": "Workspace update reports no validation error",
+      "passed": true
+    },
+    {
+      "name": "Settings show truthful provider availability",
+      "passed": true
+    },
+    {
+      "name": "Pipeline status: bluetooth",
+      "passed": true
+    },
+    {
+      "name": "Pipeline status: sip",
+      "passed": true
+    },
+    {
+      "name": "Pipeline status: browser",
+      "passed": true
+    },
+    {
+      "name": "Staff queue displays requests",
+      "passed": true
+    },
+    {
+      "name": "Staff request can be resolved",
+      "passed": true
+    },
+    {
+      "name": "No page overflow: overview at 320px",
+      "passed": true
+    },
+    {
+      "name": "No page overflow: playground at 320px",
+      "passed": true
+    },
+    {
+      "name": "No page overflow: calls at 320px",
+      "passed": true
+    },
+    {
+      "name": "No page overflow: calendar at 320px",
+      "passed": true
+    },
+    {
+      "name": "No page overflow: devices at 320px",
+      "passed": true
+    },
+    {
+      "name": "No page overflow: pipeline at 320px",
+      "passed": true
+    },
+    {
+      "name": "No page overflow: settings at 320px",
+      "passed": true
+    },
+    {
+      "name": "No page overflow: overview at 360px",
+      "passed": true
+    },
+    {
+      "name": "No page overflow: playground at 360px",
+      "passed": true
+    },
+    {
+      "name": "No page overflow: calls at 360px",
+      "passed": true
+    },
+    {
+      "name": "No page overflow: calendar at 360px",
+      "passed": true
+    },
+    {
+      "name": "No page overflow: devices at 360px",
+      "passed": true
+    },
+    {
+      "name": "No page overflow: pipeline at 360px",
+      "passed": true
+    },
+    {
+      "name": "No page overflow: settings at 360px",
+      "passed": true
+    },
+    {
+      "name": "No page overflow: overview at 390px",
+      "passed": true
+    },
+    {
+      "name": "No page overflow: playground at 390px",
+      "passed": true
+    },
+    {
+      "name": "No page overflow: calls at 390px",
+      "passed": true
+    },
+    {
+      "name": "No page overflow: calendar at 390px",
+      "passed": true
+    },
+    {
+      "name": "No page overflow: devices at 390px",
+      "passed": true
+    },
+    {
+      "name": "No page overflow: pipeline at 390px",
+      "passed": true
+    },
+    {
+      "name": "No page overflow: settings at 390px",
+      "passed": true
+    },
+    {
+      "name": "No page overflow: overview at 768px",
+      "passed": true
+    },
+    {
+      "name": "No page overflow: playground at 768px",
+      "passed": true
+    },
+    {
+      "name": "No page overflow: calls at 768px",
+      "passed": true
+    },
+    {
+      "name": "No page overflow: calendar at 768px",
+      "passed": true
+    },
+    {
+      "name": "No page overflow: devices at 768px",
+      "passed": true
+    },
+    {
+      "name": "No page overflow: pipeline at 768px",
+      "passed": true
+    },
+    {
+      "name": "No page overflow: settings at 768px",
+      "passed": true
+    },
+    {
+      "name": "No page overflow: overview at 1024px",
+      "passed": true
+    },
+    {
+      "name": "No page overflow: playground at 1024px",
+      "passed": true
+    },
+    {
+      "name": "No page overflow: calls at 1024px",
+      "passed": true
+    },
+    {
+      "name": "No page overflow: calendar at 1024px",
+      "passed": true
+    },
+    {
+      "name": "No page overflow: devices at 1024px",
+      "passed": true
+    },
+    {
+      "name": "No page overflow: pipeline at 1024px",
+      "passed": true
+    },
+    {
+      "name": "No page overflow: settings at 1024px",
+      "passed": true
+    },
+    {
+      "name": "No page overflow: overview at 1440px",
+      "passed": true
+    },
+    {
+      "name": "No page overflow: playground at 1440px",
+      "passed": true
+    },
+    {
+      "name": "No page overflow: calls at 1440px",
+      "passed": true
+    },
+    {
+      "name": "No page overflow: calendar at 1440px",
+      "passed": true
+    },
+    {
+      "name": "No page overflow: devices at 1440px",
+      "passed": true
+    },
+    {
+      "name": "No page overflow: pipeline at 1440px",
+      "passed": true
+    },
+    {
+      "name": "No page overflow: settings at 1440px",
+      "passed": true
+    },
+    {
+      "name": "Mobile navigation opens",
+      "passed": true
+    },
+    {
+      "name": "Escape closes mobile navigation",
+      "passed": true
+    },
+    {
+      "name": "Navigation focus restored",
+      "passed": true
+    },
+    {
+      "name": "Escape dismisses native device dialog",
+      "passed": true
+    },
+    {
+      "name": "No browser page errors",
+      "passed": true
+    }
+  ],
+  "passed": 86,
+  "page_errors": [],
+  "paid_api_calls": 0,
+  "hardware_tested": false,
+  "native_browser_networking_tested": false
+}

@@ -1,0 +1,5 @@
+make: Entering directory '/mnt/data/callbox-platform/firmware'
+cc -std=c11 -Wall -Wextra -Werror -pedantic -O2 -Iinclude src/callbox_audio_ring.c tests/test_audio_ring.c -o /tmp/callbox-ring-test
+/tmp/callbox-ring-test
+PASS: init, silence, fixed-frame validation, capacity, FIFO, 10000 wrap cycles, interrupt, stale epoch, null guards.
+make: Leaving directory '/mnt/data/callbox-platform/firmware'

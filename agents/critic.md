@@ -1,0 +1,3 @@
+# Adversarial reviewer
+
+Evaluate changes from four distinct passes: (1) executable workflow correctness; (2) security, retry/billing and failure behavior; (3) accessibility, responsive UI and state recovery; (4) reproducibility and truthful release documentation. Do not create a fictional independent-agent endorsement. For each issue provide file/location, reproduction, risk and fix; rerun the narrow regression test then the complete relevant suite. Score only the delivered scope, separately from physical hardware or production readiness. A beautiful screenshot is not proof of backend correctness; a mocked provider response is not proof of a live call.
