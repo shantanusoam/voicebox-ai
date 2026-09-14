@@ -17,17 +17,24 @@ from .config import Config, ROOT
 from .db import Database, digest
 from .errors import AppError
 from .models import Login, NewCall, Turn, DeviceCreate, Settings, Confirmation
-from .providers import OpenAIProvider
+from .providers import build_provider
 from .agent import Agent
 from .gateway import Gateway
 from .limits import LabGuard
+
+
+def provider_models(config):
+    if config.provider_kind == 'openrouter':
+        return {'stt':config.openrouter_stt_model,'tts':config.openrouter_tts_model,
+                'intent':config.openrouter_intent_model}
+    return {'stt':config.stt_model,'tts':config.tts_model,'intent':config.intent_model}
 
 
 def create_app(config=None, db=None, provider=None):
     config = config or Config.from_env()
     own_db = db is None
     db = db or Database(config.data_dir / 'callbox.db', config.workspace, config.demo)
-    provider = provider or OpenAIProvider(config)
+    provider = provider or build_provider(config)
     agent = Agent(db, config, provider)
     gateway = Gateway(db, agent, provider, config)
     audio_locks = weakref.WeakValueDictionary()
@@ -120,8 +127,8 @@ def create_app(config=None, db=None, provider=None):
 
     @app.get('/api/workspace')
     async def info(ws=Depends(workspace)):
-        return {'id':ws,'settings':db.settings(ws),'demo':config.demo,'provider_configured':bool(config.api_key),
-                'provider_models':{'stt':config.stt_model,'tts':config.tts_model,'intent':config.intent_model},
+        return {'id':ws,'settings':db.settings(ws),'demo':config.demo,'provider_configured':config.provider_configured,'provider_kind':config.provider_kind,
+                'provider_models':provider_models(config),
                 'calendar':'local-sqlite','telephony':'not-connected','hardware_verified':False}
 
     @app.get('/api/summary')
@@ -189,7 +196,7 @@ def create_app(config=None, db=None, provider=None):
             try:
                 speech=await provider.speak(result['reply'])
                 response['audio_base64']=base64.b64encode(speech).decode()
-                response['audio_mime']='audio/mpeg'
+                response['audio_mime']=getattr(provider,'speech_mime','audio/mpeg')
             except AppError as error:
                 response['speech_error']=error.message
             # No input audio or generated speech is written to disk.

@@ -14,6 +14,13 @@ FRAME_SAMPLES = 320
 FRAME_BYTES = FRAME_SAMPLES * 2
 MAX_TURN_BYTES = SAMPLE_RATE * 2 * 15
 
+# Below this RMS (of a 32768 full-scale signal) a turn is treated as having no
+# speech in it. Measured reference points: digital silence 0, a quiet room
+# floor well under 100, generated speech in the low thousands. This gate is
+# deliberately conservative and exists because a chat model asked to
+# transcribe silence invents a plausible sentence instead of saying nothing.
+SILENCE_RMS = 150
+
 
 def decode_frame(message):
     if message.get('sample_rate') != SAMPLE_RATE or message.get('channels', 1) != 1:
@@ -28,6 +35,25 @@ def decode_frame(message):
     if isinstance(seq, bool) or not isinstance(seq, int) or not 0 <= seq <= 2**31 - 1:
         raise AppError(422, 'sequence', 'Frame sequence must be a nonnegative integer.')
     return pcm, seq
+
+
+def pcm_rms(pcm: bytes) -> float:
+    """Root-mean-square level of mono PCM16LE, 0 for an empty buffer."""
+    samples = array('h')
+    samples.frombytes(pcm[:len(pcm) - len(pcm) % 2])
+    if sys.byteorder != 'little': samples.byteswap()
+    if not samples: return 0.0
+    return math.sqrt(sum(v * v for v in samples) / len(samples))
+
+
+def wav_rms(wav_bytes: bytes):
+    """RMS of a WAV payload, or None when it cannot be read as mono PCM16."""
+    try:
+        with wave.open(io.BytesIO(wav_bytes), 'rb') as wav:
+            if wav.getnchannels() != 1 or wav.getsampwidth() != 2: return None
+            return pcm_rms(wav.readframes(wav.getnframes()))
+    except (wave.Error, EOFError, ValueError):
+        return None
 
 
 def to_wav(pcm: bytes, sample_rate=SAMPLE_RATE):

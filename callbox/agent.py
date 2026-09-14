@@ -60,7 +60,7 @@ class Agent:
         if active >= self.config.max_active_calls:
             raise AppError(429, 'capacity', 'Active session limit reached. End an existing test session first.')
         if values.get('provider') == 'openai':
-            if not self.config.api_key: raise AppError(503, 'provider_not_configured', 'Configure OPENAI_API_KEY before selecting paid speech.')
+            if not self.config.provider_configured: raise AppError(503, 'provider_not_configured', 'Configure a provider API key on the server before selecting paid speech.')
             if not values.get('consent'): raise AppError(422, 'consent_required', 'Explicit consent is required before sending test content to a provider.')
         with self.db.transaction():
             call = self.db.new_call(workspace, **values)
