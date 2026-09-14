@@ -78,19 +78,54 @@ The console also has **Devices -> Run loopback**. It sends 50 synthetic frames. 
 
 ## Optional paid speech
 
-Copy `.env.example` to `.env`, set `OPENAI_API_KEY`, and restart. Start a new OpenAI-mode session and explicitly consent to processing synthetic test content. The browser can record up to 20 seconds per turn; WebSocket agent input is limited to 15 seconds per committed turn.
+Copy `.env.example` to `.env`, set `CALLBOX_PROVIDER` to `openrouter` or
+`openai` with the matching key, and restart. OpenRouter routes both speech
+directions through `/chat/completions`, because its `/audio/*` routes resolve
+no model; see [provider setup](docs/PROVIDERS.md) for that and two other
+non-obvious requirements.
 
-Keys stay on the backend. Model availability, cost, language quality and upstream retention must be checked for your account before use. No live paid requests were made while building this release. See [provider setup](docs/PROVIDERS.md).
+`python evals/live_smoke.py --budget 0.25` confirms the configured provider
+actually works and records what a turn costs. It makes real billed requests and
+is never run by the pipeline or CI.
+
+**A chat model asked to transcribe silence invents a sentence rather than
+reporting nothing.** Turns quieter than a measured RMS threshold are refused
+locally before any paid request, with a `NO_SPEECH` prompt contract as a second
+defence. See [provider setup](docs/PROVIDERS.md#transcription-cannot-be-trusted-to-report-silence). Start a new OpenAI-mode session and explicitly consent to processing synthetic test content. The browser can record up to 20 seconds per turn; WebSocket agent input is limited to 15 seconds per committed turn.
+
+Keys stay on the backend. `CALLBOX_MAX_TURN_COST_USD` caps a single turn against the cost the provider reports. Model availability, cost, language quality and upstream retention must be checked for your account before use. No live paid requests were made while building this release. See [provider setup](docs/PROVIDERS.md).
 
 ## Tests and tooling
 
+One command runs every layer gate and writes `qa/verify-report.json`:
+
 ```bash
 python -m pip install -r requirements-dev.txt
+python scripts/verify.py                 # L0-L7
+python scripts/verify.py --with-browser  # adds the Playwright gate
+python scripts/verify.py --list          # what each gate covers
+```
+
+| Gate | Layer | Proves |
+|---|---|---|
+| `env` | config | Environment loads, `.runtime` is not world-readable, no key is tracked in git |
+| `static` | source | Python/JS compile; `docs/openapi.json` still matches the code |
+| `unit` | domain + API | The pytest suite, including the review hardening regressions |
+| `contract` | provider | Both provider adapters against a mocked transport, zero paid calls |
+| `transport` | gateway | A real server on an ephemeral port driven by the device simulator |
+| `firmware` | device | The portable C ring under a host compiler |
+| `hardened` | deployment | A second server with `CALLBOX_DEMO=0`: nothing reachable without the token |
+| `evals` | behaviour | The thirteen [evaluation cases](docs/EVALS.md), scored against database ground truth |
+| `browser` | UI | Playwright console smoke test (opt-in) |
+
+`make verify`, `make test`, `make evals` and `npm run verify` wrap the same
+entry point. Individual tools still work on their own:
+
+```bash
 python -m pytest -q
 python scripts/build.py
 make -C firmware test
-python -m playwright install chromium
-python scripts/browser_smoke.py
+python evals/runner.py --report
 ```
 
 `make` and a C11 compiler are needed only for the portable firmware component. Node.js is optional for the build's JavaScript syntax checks; it was available during verification. The browser script uses native localhost networking by default. The delivered browser evidence was obtained with `--relay` because the managed test browser blocks localhost and file navigation; that mode is explicitly described in [QA](docs/QA.md).
@@ -106,7 +141,8 @@ web/site/                Preserved interactive marketing website and images
 firmware/                Tested portable C queue, not full device firmware
 scripts/                 Simulator, build, retention and browser test harness
 tests/                  Python regression and provider-contract tests
-docs/                   Architecture, protocol, security, roadmap and QA
+evals/                  The executable evaluation set and its scorecard
+docs/                   Architecture, protocol, security, roadmap, evals and QA
 agents/                 Reusable implementation and critic prompts
 qa/                     Actual test results and UI screenshots
 .github/workflows/      CI template (not run remotely)

@@ -9,7 +9,10 @@ This is a trusted local laboratory, not a production security review or healthca
 - Random administrator token created locally, login sessions with hashed tokens, HttpOnly/SameSite=Strict cookies, configurable Secure flag.
 - Server-only model key. Random, hashed, revocable device tokens. No secrets in WS URLs.
 - API record scoping, bound SQL parameters, transactional writes and booking confirmation.
-- HTML escaping of user values. Console CSP and other HTTP security headers. Cross-origin write rejection, Host restrictions and first-message device authentication.
+- HTML escaping of user values. CSP on every response and other HTTP security headers. Cross-origin write rejection, Host restrictions and first-message device authentication.
+- Host allowlisting, origin checks and rate limiting are enforced by plain ASGI middleware (`callbox/limits.py`) so they cover the **WebSocket** scope as well as HTTP. Before 0.2.1 these lived in an `@app.middleware('http')` handler, which Starlette never invokes for websocket connections: a DNS-rebinding handshake reached device authentication while the same Host was rejected over HTTP, and gateway handshakes were not rate limited at all.
+- `.runtime/` is created 0700 and the admin token re-chmodded 0600 on every start. It previously inherited the umask, commonly leaving stored transcripts world-readable.
+- Near-silent audio turns are refused locally before any paid provider request, because a chat-model transcriber confabulates words rather than reporting silence. See docs/PROVIDERS.md.
 - Finite request/audio buffers, per-session locks, limits, provider timeouts, redacted provider error messages, idempotent request outcomes.
 - Explicit paid-mode consent. No application disk storage of raw audio or generated speech.
 

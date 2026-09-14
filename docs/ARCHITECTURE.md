@@ -16,7 +16,7 @@
  Carrier + PBX ------- NOT IMPLEMENTED ----> future adapter
 ```
 
-`callbox/main.py` owns HTTP authentication, validation, UI serving and lifecycle. `db.py` owns authoritative records and transactions. `agent.py` owns a small conversational state machine. `gateway.py` owns authenticated device connection state, epochs, input buffers and output cancellation. `providers.py` isolates external APIs. No browser or model directly writes SQL.
+`callbox/limits.py` owns the transport guard - host allowlist, origin checks, rate limiting and the JSON body cap - as plain ASGI middleware, so HTTP and WebSocket connections are policed identically. `callbox/main.py` owns HTTP authentication, validation, UI serving and lifecycle. `db.py` owns authoritative records and transactions. `agent.py` owns a small conversational state machine. `gateway.py` owns authenticated device connection state, epochs, input buffers and output cancellation. `providers.py` isolates external APIs behind one three-method interface, with `build_provider()` selecting the adapter named by `CALLBOX_PROVIDER`; no other module learns which provider is configured. No browser or model directly writes SQL.
 
 ### Booking state
 
@@ -32,7 +32,7 @@ SQLite schema version 1 contains workspaces, sessions, devices, calls, messages,
 
 ### Audio and paid work
 
-Browser microphone input is one bounded recording per HTTP request. WebSocket input is fixed PCM frames committed as a turn. The gateway sends generated WAV speech as normalized PCM frames, at nominal 20 ms spacing. Resampling uses a laboratory linear interpolator, not a production DSP implementation. There is no acoustic echo cancellation, codec negotiation, voice activity detection, automatic turn endpointing or tested full-duplex speech.
+Browser microphone input is one bounded recording per HTTP request. WebSocket input is fixed PCM frames committed as a turn. The gateway sends generated WAV speech as normalized PCM frames, at nominal 20 ms spacing. Resampling uses a laboratory linear interpolator - with integer decimation for exact-multiple rates - and runs on a worker thread, because inline execution stalled the event loop for every other call. It is not a production DSP implementation. There is no acoustic echo cancellation, codec negotiation, voice activity detection, automatic turn endpointing or tested full-duplex speech.
 
 Paid audio requests are serialized per session. A cached retry returns the stored text/actions without generating speech again. The cache is written after the authoritative turn, before TTS. A request cancelled while upstream transcription is in flight may still incur provider charges; the local application cannot reverse upstream billing. A process crash between an external API response and local cache persistence can also require reconciliation.
 

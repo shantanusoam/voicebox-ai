@@ -1,10 +1,81 @@
-# Optional speech provider
+# Optional speech providers
 
-## Implemented adapter, unperformed live test
+Two adapters implement one interface - `transcribe(audio, mime)`,
+`classify(text, today)`, `speak(text, wav=False)` - so `agent.py` and
+`gateway.py` never learn which one is configured. `CALLBOX_PROVIDER` selects
+between them (`openrouter`, `openai` or `none`). Contract tests use a mocked
+transport and make no paid calls.
 
-`callbox/providers.py` contains a backend-only OpenAI adapter. HTTP contract tests use mocked responses. No API key was supplied or billed request made during this build. A configured key is not a verified connection; the UI labels this distinction.
+A configured key is not a verified connection. The UI labels that distinction,
+and `evals/live_smoke.py` is the only thing here that spends money.
 
-Defaults are configurable, not a claim about the cheapest or newest models:
+## OpenRouter
+
+Enabled with `CALLBOX_PROVIDER=openrouter` and `OPENROUTER_API_KEY`.
+
+| Setting | Default | Route |
+|---|---|---|
+| OPENROUTER_STT_MODEL | google/gemini-3.8-flash | POST /chat/completions with an `input_audio` part |
+| OPENROUTER_INTENT_MODEL | google/gemini-3.8-flash | POST /chat/completions with a strict `json_schema` |
+| OPENROUTER_TTS_MODEL | openai/gpt-audio-mini | POST /chat/completions, streamed, `modalities:["text","audio"]` |
+| OPENROUTER_VOICE | alloy | Speech voice |
+| CALLBOX_MAX_TURN_COST_USD | 0.05 | Per-turn ceiling, enforced against the cost OpenRouter reports |
+
+### Three facts that are easy to get wrong
+
+These were established by probing the live API, not by reading a table:
+
+1. **`/audio/transcriptions` and `/audio/speech` exist but are unusable here.**
+   Both routes accept a request and validate a schema, but no model id in the
+   catalogue resolves for either - `openai/tts-1`, `openai/gpt-4o-mini-tts`,
+   `google/gemini-2.5-flash-preview-tts` and `elevenlabs/eleven-turbo-v2-5` all
+   return `Model ... does not exist`. Both speech directions therefore run
+   through `/chat/completions`.
+2. **Audio output requires `stream: true`.** A non-streaming request returns
+   `400 Audio output requires stream: true`. The adapter accumulates
+   `choices[].delta.audio.data` chunks and wraps the result in a WAV header, so
+   callers resample it exactly as they would any other provider WAV.
+3. **`reasoning: {enabled: false}` is rejected.** Gemini answers `Reasoning is
+   mandatory for this endpoint and cannot be disabled.` The adapter sends
+   `reasoning: {effort: "low"}`, which is accepted and measured at zero
+   reasoning tokens.
+
+`speak()` returns 24 kHz mono PCM16 in a WAV container; the gateway resamples
+to the 16 kHz device contract.
+
+### Transcription cannot be trusted to report silence
+
+A chat model asked to transcribe a silent or non-speech clip **invents a
+plausible sentence** rather than returning nothing. Measured on one second of
+digital silence:
+
+| Model | Returned |
+|---|---|
+| google/gemini-3.8-flash | "The company's headquarter is located at Washington DC." |
+| google/gemini-3.8-flash, effort=low | "We're taking a look at this. It's a high-class, beautiful pl..." |
+| google/gemini-3.7-flash | "You must listen to me." |
+
+On a phone line that is fabricated caller text driving a booking state
+machine. The empty-string check that suffices for a dedicated speech-to-text
+endpoint can never fire here. There are two defences, and the first does not
+depend on the model:
+
+- **A deterministic RMS gate** (`callbox/audio.py`, `SILENCE_RMS`). A turn
+  quieter than the threshold is refused locally, before any paid request.
+  Reference levels: digital silence 0, quiet noise floor ~42, generated speech
+  ~3158, threshold 150.
+- **A `NO_SPEECH` sentinel** in the transcription prompt, mapped to the
+  existing `no_speech` error. It works when the model complies; the gate covers
+  when it does not.
+
+The RMS gate only applies to WAV input, which is the gateway path. Compressed
+browser uploads (WebM/MP4/OGG) cannot be inspected without a decoder, so they
+rely on the sentinel alone. That gap is open.
+
+## OpenAI
+
+Enabled with `CALLBOX_PROVIDER=openai` and `OPENAI_API_KEY`. Unchanged from
+0.2.0 and still not live-tested.
 
 | Setting | Default | API |
 |---|---|---|
@@ -13,32 +84,49 @@ Defaults are configurable, not a claim about the cheapest or newest models:
 | OPENAI_TTS_MODEL | gpt-4o-mini-tts | POST /v1/audio/speech |
 | OPENAI_VOICE | coral | Speech voice |
 
-Official reference documentation consulted for the adapter:
-- https://developers.openai.com/api/docs/guides/speech-to-text
-- https://developers.openai.com/api/docs/guides/text-to-speech
-- https://developers.openai.com/api/docs/guides/structured-outputs
-
-Check model access and supported arguments for your account at deployment. This is not the Realtime API, SIP integration, or an OpenAI-hosted telephone service.
+Check model access and supported arguments for your account at deployment.
+This is not the Realtime API, SIP integration, or a hosted telephone service.
 
 ## Enable locally
 
 1. Copy `.env.example` to `.env`.
-2. Put your API key in `OPENAI_API_KEY`. Never paste a secret into website source or commit it.
+2. Set `CALLBOX_PROVIDER` and the matching key. Never commit `.env` or paste a
+   secret into web source.
 3. Restart `python -m callbox`.
-4. In the playground, select OpenAI processing and explicitly consent to synthetic-content processing.
-5. Use Chrome/another supported browser on localhost or HTTPS, grant microphone permission and record one short turn. Stop manually or wait for the 20-second UI cap.
-6. Verify transcript, tool outcome, generated speech, actual provider usage/cost, and saved local state. Repeat with Hindi/Hinglish and interruptions before drawing quality conclusions.
+4. Optionally confirm the provider actually works and what it costs:
+   `python evals/live_smoke.py --budget 0.25`. This makes real billed
+   requests, stops at the budget, and writes `evals/out/live-smoke.json`.
+5. In the playground, select paid processing and explicitly consent.
+6. Record one short turn, then check the transcript, tool outcome, generated
+   speech, reported cost and saved local state. Repeat in Hindi/Hinglish and
+   with interruptions before drawing any quality conclusion.
 
-The default local mode requires neither a microphone nor an LLM API. Browser read-aloud is a separate optional browser/OS speech service and is not guaranteed to be offline.
+The default local mode needs neither a microphone nor a paid API. Browser
+read-aloud is a separate OS/browser speech service and is not guaranteed to be
+offline.
 
 ## Guardrails and limits
 
-The model may classify an otherwise unknown request. It cannot bypass the booking state machine, execute arbitrary tools, invent a calendar confirmation or change clinical treatment. The intent schema includes only narrowly enumerated actions. Names, selected slots and final confirmation stay deterministic.
+A model may classify an otherwise unknown request. It cannot bypass the booking
+state machine, execute arbitrary tools, invent a calendar confirmation or
+change clinical treatment. The intent schema enumerates a closed set of
+actions; names, selected slots and the final confirmation stay deterministic.
 
-The adapter has timeouts and explicit error mapping; it does not retry paid requests automatically. HTTP input is bounded at 4 MB and supported MIME types. Audio is transient in application memory. Transcripts, names and action results persist in SQLite. Provider-side storage/retention is governed by the provider configuration and account terms; the project does not promise zero upstream retention. The Responses request sets `store:false`, which is not a blanket retention guarantee for every upstream system.
+Both adapters have timeouts, sanitized errors and no automatic retry of paid
+requests. HTTP input is bounded at 4 MB and to supported MIME types. Audio is
+transient in memory; transcripts, names and action results persist in SQLite.
+Upstream retention is governed by your provider account, not by this project.
+`store:false` on the Responses request is not a blanket retention guarantee.
 
-For WS agent mode, generated speech must be mono PCM16 WAV. The lab normalizes it to 16 kHz and outputs 20 ms frames. Replace the simple resampler and benchmark scheduling/audio quality before real phone use.
+Generated speech is normalized to mono PCM16 at 16 kHz and emitted as 20 ms
+frames. The resampler is a laboratory linear interpolator with integer
+decimation for exact-multiple rates; it runs on a worker thread so it cannot
+stall the event loop. Benchmark scheduling and audio quality before any real
+phone use.
 
-## Alternative providers
+## Adding another provider
 
-Implement the same asynchronous `transcribe(audio, mime)`, `classify(text, today)` and `speak(text, wav=False)` interface, with validation, sanitized errors, explicit consent and deterministic tool permissions. Add contract tests before replacing the injected provider in `create_app`. Exotel, Plivo, Twilio, SIP and HFP are transports, not interchangeable speech-model adapters. None is wired up here.
+Implement the same three coroutines with validation, sanitized errors,
+explicit consent and deterministic tool permissions, add contract tests, then
+register it in `build_provider`. Exotel, Plivo, Twilio, SIP and HFP are
+transports, not speech-model adapters. None is wired up here.
