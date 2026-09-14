@@ -243,7 +243,7 @@ async function recordTurn(){
    if(recorder.discard||!chunks.length){if(state.view==='playground')render();return;}
    const blob=new Blob(chunks,{type:recorder.mimeType});state.busy=true;if(state.view==='playground')render();
    try{
-    const result=await api(`/calls/${callId}/audio?request_id=${requestId()}`,{method:'POST',headers:{'Content-Type':blob.type},body:blob});
+    const result=await api(`/calls/${callId}/audio`,{method:'POST',headers:{'Content-Type':blob.type,'X-Request-Id':requestId()},body:blob});
     if(state.activeCall?.id===callId){state.activeCall=result.call;state.actions.push(...result.actions);state.lastElapsed=result.elapsed_ms;}
     if(result.audio_base64){audioPlayer=new Audio('data:'+result.audio_mime+';base64,'+result.audio_base64);await audioPlayer.play().catch(()=>toast('Reply saved. Your browser blocked automatic audio playback.'));}
     if(result.speech_error)toast(result.speech_error,true);

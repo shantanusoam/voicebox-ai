@@ -86,7 +86,7 @@ def test_provider_requires_explicit_consent(client,config):
     assert client.post('/api/calls',json={'label':'test','provider':'openai'}).status_code==422
 
 def test_no_audio_processing_on_local_session(client,make_call):
-    r=client.post('/api/calls/'+make_call()['id']+'/audio?request_id=12345678',content=b'x'*100,headers={'content-type':'audio/webm'})
+    r=client.post('/api/calls/'+make_call()['id']+'/audio',content=b'x'*100,headers={'content-type':'audio/webm','x-request-id':'12345678'})
     assert r.status_code==403
 
 def test_sql_input_is_not_query_code(client,make_call):

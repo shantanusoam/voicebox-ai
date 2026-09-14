@@ -19,7 +19,7 @@ def test_malformed_device_id_does_not_raise_internal_error(client):
 
 def test_audio_request_id_validated_before_provider(client,make_call,config):
     config.api_key='not-a-real-key';c=make_call(provider='openai',consent=True)
-    r=client.post('/api/calls/'+c['id']+'/audio?request_id=bad%20key',content=b'x'*100,headers={'content-type':'audio/webm'})
+    r=client.post('/api/calls/'+c['id']+'/audio',content=b'x'*100,headers={'content-type':'audio/webm','x-request-id':'bad key'})
     assert r.status_code==422
 
 class FakeProvider:
@@ -36,8 +36,8 @@ def test_concurrent_duplicate_audio_not_transcribed_twice(config,db):
     async def run():
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),base_url='http://testserver',headers={'Authorization':'Bearer '+config.admin_token}) as client:
             c=(await client.post('/api/calls',json={'label':'Speech lab','provider':'openai','consent':True})).json()
-            url='/api/calls/'+c['id']+'/audio?request_id=concurrent-audio-0001'
-            replies=await asyncio.gather(*(client.post(url,content=b'x'*100,headers={'Content-Type':'audio/webm'}) for _ in range(2)))
+            url='/api/calls/'+c['id']+'/audio';rid='concurrent-audio-0001'
+            replies=await asyncio.gather(*(client.post(url,content=b'x'*100,headers={'Content-Type':'audio/webm','X-Request-Id':rid}) for _ in range(2)))
             assert all(r.status_code==200 for r in replies)
             assert p.transcriptions==1 and p.speech==1
             assert sorted(r.json()['replayed'] for r in replies)==[False,True]
@@ -47,9 +47,9 @@ def test_audio_hash_conflict_prevents_second_paid_call(config,db):
     config.api_key='fake-key';p=FakeProvider()
     with TestClient(create_app(config,db,p)) as client:
         client.post('/api/auth/demo');c=client.post('/api/calls',json={'label':'Speech lab','provider':'openai','consent':True}).json()
-        url='/api/calls/'+c['id']+'/audio?request_id=voice-repeat-test-01'
-        a=client.post(url,content=b'x'*100,headers={'content-type':'audio/webm'})
-        b=client.post(url,content=b'y'*100,headers={'content-type':'audio/webm'})
+        url='/api/calls/'+c['id']+'/audio';rid='voice-repeat-test-01'
+        a=client.post(url,content=b'x'*100,headers={'content-type':'audio/webm','x-request-id':rid})
+        b=client.post(url,content=b'y'*100,headers={'content-type':'audio/webm','x-request-id':rid})
         assert a.status_code==200 and b.status_code==409
         assert p.transcriptions==1
 

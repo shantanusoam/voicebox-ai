@@ -283,16 +283,17 @@ class Database:
         return self.one('SELECT workspace FROM sessions WHERE token_hash=? AND expires_at>?', (digest(token), time.time()))
 
     def summary(self, workspace):
-        calls = self.calls(workspace)
-        apts = self.appointments(workspace)
-        tasks = self.tasks(workspace)
-        devices = self.devices(workspace)
-        return dict(calls=len(calls), sample_calls=sum(bool(x['sample']) for x in calls),
-                    active=sum(x['status']=='active' for x in calls),
-                    booked=sum(x['status']=='confirmed' for x in apts),
-                    review=sum(x['status']=='open' for x in tasks),
-                    online=sum(x['status']=='online' for x in devices),
-                    today=datetime.now(IST).strftime('%A, %d %B %Y'), timezone='Asia/Kolkata')
+        # Aggregate in SQL. Counting the list helpers instead capped every
+        # figure at their LIMIT, so the overview under-reported past 200 calls.
+        counts = self.one('''SELECT
+            (SELECT COUNT(*) FROM calls WHERE workspace=:w) calls,
+            (SELECT COUNT(*) FROM calls WHERE workspace=:w AND sample=1) sample_calls,
+            (SELECT COUNT(*) FROM calls WHERE workspace=:w AND status='active') active,
+            (SELECT COUNT(*) FROM appointments WHERE workspace=:w AND status='confirmed') booked,
+            (SELECT COUNT(*) FROM tasks WHERE workspace=:w AND status='open') review,
+            (SELECT COUNT(*) FROM devices WHERE workspace=:w AND status='online') online''',
+            {'w': workspace})
+        return dict(counts, today=datetime.now(IST).strftime('%A, %d %B %Y'), timezone='Asia/Kolkata')
 
     def seed(self, workspace):
         examples = [('Aarav - sample','Clinic hours','What time do you open?','This demo clinic opens at 10 AM.'),

@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
+import contextlib
 import os
 import secrets
 
@@ -38,6 +39,10 @@ class Config:
         load_env(ROOT / '.env')
         data = Path(os.getenv('CALLBOX_DATA_DIR', str(ROOT / '.runtime'))).resolve()
         data.mkdir(parents=True, exist_ok=True)
+        # Transcripts and names live in this directory. Without an explicit
+        # mode it inherits the umask and is commonly world-readable.
+        with contextlib.suppress(OSError):
+            data.chmod(0o700)
         token = os.getenv('CALLBOX_ADMIN_TOKEN', '')
         demo = os.getenv('CALLBOX_DEMO', '1') == '1'
         if not demo and len(token) < 32:
@@ -46,7 +51,10 @@ class Config:
         if not token:
             token = token_file.read_text().strip() if token_file.exists() else secrets.token_urlsafe(32)
             token_file.write_text(token + '\n')
-            token_file.chmod(0o600)
+        if token_file.exists():
+            # Re-assert on every start, not only when the file is created.
+            with contextlib.suppress(OSError):
+                token_file.chmod(0o600)
         return cls(data, token, demo, os.getenv('CALLBOX_SECURE_COOKIE', '0') == '1',
                    os.getenv('OPENAI_API_KEY', ''), os.getenv('OPENAI_STT_MODEL', 'gpt-4o-mini-transcribe'),
                    os.getenv('OPENAI_TTS_MODEL', 'gpt-4o-mini-tts'),

@@ -20,7 +20,7 @@ from .models import Login, NewCall, Turn, DeviceCreate, Settings, Confirmation
 from .providers import OpenAIProvider
 from .agent import Agent
 from .gateway import Gateway
-from .limits import JsonBodyLimit
+from .limits import LabGuard
 
 
 def create_app(config=None, db=None, provider=None):
@@ -30,7 +30,6 @@ def create_app(config=None, db=None, provider=None):
     provider = provider or OpenAIProvider(config)
     agent = Agent(db, config, provider)
     gateway = Gateway(db, agent, provider, config)
-    rate_buckets = {}
     audio_locks = weakref.WeakValueDictionary()
 
     @asynccontextmanager
@@ -44,41 +43,16 @@ def create_app(config=None, db=None, provider=None):
                   description='Local development API. Not a production phone/medical service.')
     app.state.db, app.state.agent, app.state.gateway = db, agent, gateway
     app.state.config, app.state.provider = config, provider
-    app.add_middleware(JsonBodyLimit)
 
     @app.exception_handler(AppError)
     async def handle_error(request, error):
         return JSONResponse({'error':{'code':error.code,'message':error.message}}, status_code=error.status)
 
     @app.middleware('http')
-    async def security(request: Request, call_next):
-        host = request.url.hostname
-        # Local lab rejects arbitrary Host values, including DNS rebinding.
-        import os
-        public_origin = os.getenv('CALLBOX_PUBLIC_ORIGIN','')
-        public_host = urlparse(public_origin).hostname
-        allowed = {'localhost','127.0.0.1','::1','testserver'}
-        if public_host: allowed.add(public_host)
-        if host not in allowed:
-            return JSONResponse({'error':{'code':'host','message':'Host not permitted for this lab.'}}, status_code=403)
-        if request.method not in {'GET','HEAD','OPTIONS'}:
-            origin = request.headers.get('origin')
-            expected = public_origin or str(request.base_url).rstrip('/')
-            if origin and origin.rstrip('/') != expected:
-                return JSONResponse({'error':{'code':'origin','message':'Cross-origin writes are not allowed.'}},status_code=403)
+    async def security_headers(request: Request, call_next):
+        """Response headers only. Host, origin and rate checks live in
+        LabGuard, which also covers the WebSocket scope."""
         path = request.url.path
-        if path.startswith('/api/'):
-            ip = request.client.host if request.client else 'unknown'
-            bucket = (ip, 'auth' if path.startswith('/api/auth/') else 'api')
-            limit = 30 if bucket[1]=='auth' else 600
-            window = int(time.time()//60)
-            previous_window, count = rate_buckets.get(bucket, (window,0))
-            count = count+1 if previous_window==window else 1
-            rate_buckets[bucket] = (window,count)
-            # Hard cap prevents attacker-controlled source addresses growing memory indefinitely.
-            if len(rate_buckets)>2000: rate_buckets.clear()
-            if count>limit:
-                return JSONResponse({'error':{'code':'rate_limit','message':'Too many requests. Please pause before retrying.'}}, status_code=429)
         response = await call_next(request)
         response.headers['X-Content-Type-Options'] = 'nosniff'
         response.headers['Referrer-Policy'] = 'no-referrer'
@@ -86,9 +60,21 @@ def create_app(config=None, db=None, provider=None):
         response.headers['Permissions-Policy'] = 'microphone=(self), camera=(), geolocation=()'
         if path.startswith('/api/'):
             response.headers['Cache-Control'] = 'no-store'
-        if path.startswith('/app'):
-            response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' blob: data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+        if path.startswith('/docs') or path.startswith('/redoc') or path.startswith('/openapi.json'):
+            # Swagger UI is served from a CDN and injects inline styles.
+            response.headers['Content-Security-Policy'] = (
+                "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; "
+                "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; img-src 'self' data: https://fastapi.tiangolo.com; "
+                "connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'")
+        else:
+            response.headers['Content-Security-Policy'] = (
+                "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; "
+                "media-src 'self' blob: data:; connect-src 'self'; object-src 'none'; "
+                "base-uri 'self'; frame-ancestors 'none'")
         return response
+
+    import os
+    app.add_middleware(LabGuard, public_origin=os.getenv('CALLBOX_PUBLIC_ORIGIN', ''))
 
     def workspace(request: Request):
         session = db.authenticate_session(request.cookies.get('callbox_session'))
@@ -158,9 +144,10 @@ def create_app(config=None, db=None, provider=None):
 
     @app.post('/api/calls/{cid}/end')
     async def end_call(cid: str,ws=Depends(workspace)):
+        # The lock is NOT popped: a turn already waiting on it would
+        # otherwise be left holding a lock nobody new acquires, letting a
+        # later turn run concurrently with it.
         async with agent.lock(cid): result=db.end_call(ws,cid)
-        agent.locks.pop(cid,None)
-        audio_locks.pop(cid,None)
         return result
 
     @app.get('/api/calls/{cid}/export')
@@ -170,9 +157,12 @@ def create_app(config=None, db=None, provider=None):
                             headers={'Content-Disposition':f'attachment; filename="{cid}.json"'})
 
     @app.post('/api/calls/{cid}/audio')
-    async def audio_turn(cid: str,request: Request,request_id: str,ws=Depends(workspace)):
+    async def audio_turn(cid: str,request: Request,ws=Depends(workspace)):
+        # Header, not a query parameter: request IDs otherwise land in access
+        # logs and browser history, unlike every other mutation on this API.
+        request_id=request.headers.get('x-request-id','')
         if not re.fullmatch(r'[A-Za-z0-9_-]{8,100}', request_id):
-            raise AppError(422,'request_id','Provide a valid unique request ID before sending audio.')
+            raise AppError(422,'request_id','Provide a valid unique X-Request-Id header before sending audio.')
         call=db.call(ws,cid)
         if call['provider']!='openai' or not call['consent']:
             raise AppError(403,'voice_not_enabled','Create an OpenAI test session with explicit consent first.')
@@ -248,10 +238,8 @@ def create_app(config=None, db=None, provider=None):
 
     @app.websocket('/ws/device')
     async def device_socket(socket: WebSocket):
-        origin=socket.headers.get('origin')
-        expected=str(socket.url).replace('ws://','http://').replace('wss://','https://').split('/ws/')[0]
-        if origin and origin.rstrip('/')!=expected:
-            await socket.close(1008);return
+        # Host allowlist, origin and handshake rate limiting are enforced by
+        # LabGuard before this handler runs, for the websocket scope too.
         await gateway.handle(socket)
 
     @app.get('/app')
