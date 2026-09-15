@@ -50,6 +50,7 @@ The local parser is intentionally narrow. Unknown requests are sent to the staff
 | Area | Working behavior |
 |---|---|
 | Operator console | Responsive overview, call playground, searchable sessions, transcript export, calendar, staff queue, device identities, settings and implementation gates |
+| Multi-tenancy | Tenants own numbers; the dialled number selects the tenant, each has its own voice, language and persona, and isolation is tested from several directions ([details](docs/TENANCY.md)) |
 | Orchestration | Risk-tiered tool policy, argument validation, serialised writes, phase routing and an audit trail between the voice model and the data ([details](docs/ORCHESTRATION.md)) |
 | Workflows | Actual SQLite writes, explicit booking confirmation, slot recheck, duplicate-request protection, scoped queries and local cancellation |
 | Transport | Real authenticated WebSocket endpoint, fixed PCM framing, bounded audio buffers, echo, interruption epochs, end/disconnect handling and device revocation |

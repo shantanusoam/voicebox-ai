@@ -33,7 +33,7 @@ docker compose -f telephony/compose.yaml up
 #      password  callbox-lab-secret
 ```
 
-`1001` reaches the AI receptionist. `1002` is a plain echo test, useful for
+`1001` reaches the AI receptionist. `9999` is a plain echo test, useful for
 separating an audio-path problem from an AI problem.
 
 ## Audio reality

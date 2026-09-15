@@ -38,6 +38,12 @@ class Settings(StrictModel):
     fee: int = Field(ge=0, le=100000)
     address: str = Field(min_length=2, max_length=180)
     staff_label: str = Field(min_length=2, max_length=80)
+    # Per-tenant voice identity. Each tenant's agent sounds like that tenant,
+    # rather than every business sharing one generic receptionist.
+    language: Literal['en', 'hinglish', 'hi'] = 'en'
+    voice: str = Field(default='alloy', min_length=2, max_length=40)
+    greeting: str = Field(default='', max_length=400)
+    persona: str = Field(default='', max_length=600)
     @field_validator('close_hour')
     @classmethod
     def after_open(cls, value, info):
@@ -53,3 +59,24 @@ class Confirmation(StrictModel):
 class ProviderIntent(StrictModel):
     intent: Literal['book', 'hours', 'fee', 'location', 'human', 'medical', 'emergency', 'unknown']
     date: str | None
+
+
+class TenantCreate(StrictModel):
+    id: str = Field(min_length=2, max_length=40, pattern=r'^[a-z0-9][a-z0-9-]*$')
+    name: str = Field(min_length=2, max_length=80)
+    language: Literal['en', 'hinglish', 'hi'] = 'en'
+    voice: str = Field(default='alloy', min_length=2, max_length=40)
+    persona: str = Field(default='', max_length=600)
+
+
+class NumberAssign(StrictModel):
+    number: str = Field(min_length=6, max_length=24)
+    provider: Literal['plivo', 'exotel', 'telnyx', 'twilio', 'sip', 'sarvam', 'lab'] = 'lab'
+    inbound: bool = True
+    outbound: bool = False
+    status: Literal['pending_kyc', 'active', 'suspended'] = 'pending_kyc'
+
+
+class NumberActivate(StrictModel):
+    caller_id_verified: bool = False
+    outbound: bool | None = None

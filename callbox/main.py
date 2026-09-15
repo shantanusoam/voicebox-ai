@@ -17,7 +17,9 @@ from fastapi.staticfiles import StaticFiles
 from .config import Config, ROOT
 from .db import Database, digest
 from .errors import AppError
-from .models import Login, NewCall, Turn, DeviceCreate, Settings, Confirmation
+from .models import (Login, NewCall, Turn, DeviceCreate, Settings, Confirmation,
+                     TenantCreate, NumberAssign, NumberActivate)
+from .tenancy import NumberService
 from .providers import build_provider
 from .agent import Agent
 from .gateway import Gateway
@@ -38,6 +40,7 @@ def create_app(config=None, db=None, provider=None):
     db = db or Database(config.data_dir / 'callbox.db', config.workspace, config.demo)
     provider = provider or build_provider(config)
     agent = Agent(db, config, provider)
+    numbers = NumberService(db)
     gateway = Gateway(db, agent, provider, config)
     audio_locks = weakref.WeakValueDictionary()
 
@@ -51,6 +54,7 @@ def create_app(config=None, db=None, provider=None):
     app = FastAPI(title='CallBox Lab API', version='0.2.0', lifespan=lifespan,
                   description='Local development API. Not a production phone/medical service.')
     app.state.db, app.state.agent, app.state.gateway = db, agent, gateway
+    app.state.numbers = numbers
     app.state.config, app.state.provider = config, provider
 
     @app.exception_handler(AppError)
@@ -93,6 +97,16 @@ def create_app(config=None, db=None, provider=None):
             return config.workspace
         raise AppError(401,'auth_required','Sign in to the local CallBox workspace.')
 
+    def platform(request: Request):
+        """Platform operator, proven by the admin token. A tenant session is
+        deliberately not enough: a tenant must never create or inspect another."""
+        authorization = request.headers.get('authorization', '')
+        if authorization.startswith('Bearer ') and secrets.compare_digest(
+                authorization[7:].encode(), config.admin_token.encode()):
+            return True
+        raise AppError(403, 'platform_only',
+                       'This action requires the platform administrator token.')
+
     def login_response():
         token = db.login(config.workspace, config.session_seconds)
         response = JSONResponse({'ok':True})
@@ -133,6 +147,42 @@ def create_app(config=None, db=None, provider=None):
                 'realtime_available':config.realtime_available,'realtime_model':config.realtime_model,
                 'provider_models':provider_models(config),
                 'calendar':'local-sqlite','telephony':'not-connected','hardware_verified':False}
+
+    # --- platform: tenants and their numbers --------------------------
+    @app.get('/api/platform/tenants')
+    async def list_tenants(_=Depends(platform)):
+        return numbers.tenants()
+
+    @app.post('/api/platform/tenants', status_code=201)
+    async def create_tenant(body: TenantCreate, _=Depends(platform)):
+        values = body.model_dump()
+        tenant_id = values.pop('id')
+        if db.settings_or_none(tenant_id):
+            raise AppError(409, 'tenant_exists', 'That tenant already exists.')
+        db.create_workspace(tenant_id, **values)
+        db.event(tenant_id, 'tenant.created', f'Tenant {values["name"]} created')
+        return numbers.tenant(tenant_id)
+
+    @app.get('/api/platform/tenants/{tenant_id}')
+    async def get_tenant(tenant_id: str, _=Depends(platform)):
+        return numbers.tenant(tenant_id)
+
+    @app.get('/api/platform/numbers')
+    async def list_numbers(_=Depends(platform)):
+        return numbers.numbers()
+
+    @app.post('/api/platform/tenants/{tenant_id}/numbers', status_code=201)
+    async def assign_number(tenant_id: str, body: NumberAssign, _=Depends(platform)):
+        return numbers.assign(tenant_id, **body.model_dump())
+
+    @app.post('/api/platform/numbers/{number}/activate')
+    async def activate_number(number: str, body: NumberActivate, _=Depends(platform)):
+        return numbers.activate(number, **body.model_dump())
+
+    @app.get('/api/platform/route')
+    async def route_number(called: str, _=Depends(platform)):
+        """Which tenant answers this number. Unrouted is an error, never a default."""
+        return {'called': called, 'tenant': numbers.resolve_or_raise(called)}
 
     @app.get('/api/summary')
     async def summary(ws=Depends(workspace)): return db.summary(ws)

@@ -116,6 +116,79 @@
         "title": "NewCall",
         "type": "object"
       },
+      "NumberActivate": {
+        "additionalProperties": false,
+        "properties": {
+          "caller_id_verified": {
+            "default": false,
+            "title": "Caller Id Verified",
+            "type": "boolean"
+          },
+          "outbound": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Outbound"
+          }
+        },
+        "title": "NumberActivate",
+        "type": "object"
+      },
+      "NumberAssign": {
+        "additionalProperties": false,
+        "properties": {
+          "inbound": {
+            "default": true,
+            "title": "Inbound",
+            "type": "boolean"
+          },
+          "number": {
+            "maxLength": 24,
+            "minLength": 6,
+            "title": "Number",
+            "type": "string"
+          },
+          "outbound": {
+            "default": false,
+            "title": "Outbound",
+            "type": "boolean"
+          },
+          "provider": {
+            "default": "lab",
+            "enum": [
+              "plivo",
+              "exotel",
+              "telnyx",
+              "twilio",
+              "sip",
+              "sarvam",
+              "lab"
+            ],
+            "title": "Provider",
+            "type": "string"
+          },
+          "status": {
+            "default": "pending_kyc",
+            "enum": [
+              "pending_kyc",
+              "active",
+              "suspended"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "number"
+        ],
+        "title": "NumberAssign",
+        "type": "object"
+      },
       "Settings": {
         "additionalProperties": false,
         "properties": {
@@ -147,6 +220,22 @@
             "title": "Fee",
             "type": "integer"
           },
+          "greeting": {
+            "default": "",
+            "maxLength": 400,
+            "title": "Greeting",
+            "type": "string"
+          },
+          "language": {
+            "default": "en",
+            "enum": [
+              "en",
+              "hinglish",
+              "hi"
+            ],
+            "title": "Language",
+            "type": "string"
+          },
           "name": {
             "maxLength": 80,
             "minLength": 2,
@@ -158,6 +247,12 @@
             "minimum": 0.0,
             "title": "Open Hour",
             "type": "integer"
+          },
+          "persona": {
+            "default": "",
+            "maxLength": 600,
+            "title": "Persona",
+            "type": "string"
           },
           "slot_minutes": {
             "default": 30,
@@ -181,6 +276,13 @@
             "default": "Asia/Kolkata",
             "title": "Timezone",
             "type": "string"
+          },
+          "voice": {
+            "default": "alloy",
+            "maxLength": 40,
+            "minLength": 2,
+            "title": "Voice",
+            "type": "string"
           }
         },
         "required": [
@@ -192,6 +294,53 @@
           "staff_label"
         ],
         "title": "Settings",
+        "type": "object"
+      },
+      "TenantCreate": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "maxLength": 40,
+            "minLength": 2,
+            "pattern": "^[a-z0-9][a-z0-9-]*$",
+            "title": "Id",
+            "type": "string"
+          },
+          "language": {
+            "default": "en",
+            "enum": [
+              "en",
+              "hinglish",
+              "hi"
+            ],
+            "title": "Language",
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 80,
+            "minLength": 2,
+            "title": "Name",
+            "type": "string"
+          },
+          "persona": {
+            "default": "",
+            "maxLength": 600,
+            "title": "Persona",
+            "type": "string"
+          },
+          "voice": {
+            "default": "alloy",
+            "maxLength": 40,
+            "minLength": 2,
+            "title": "Voice",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "title": "TenantCreate",
         "type": "object"
       },
       "Turn": {
@@ -851,6 +1000,241 @@
           }
         },
         "summary": "Events"
+      }
+    },
+    "/api/platform/numbers": {
+      "get": {
+        "operationId": "list_numbers_api_platform_numbers_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Numbers"
+      }
+    },
+    "/api/platform/numbers/{number}/activate": {
+      "post": {
+        "operationId": "activate_number_api_platform_numbers__number__activate_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "number",
+            "required": true,
+            "schema": {
+              "title": "Number",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NumberActivate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Activate Number"
+      }
+    },
+    "/api/platform/route": {
+      "get": {
+        "description": "Which tenant answers this number. Unrouted is an error, never a default.",
+        "operationId": "route_number_api_platform_route_get",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "called",
+            "required": true,
+            "schema": {
+              "title": "Called",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Route Number"
+      }
+    },
+    "/api/platform/tenants": {
+      "get": {
+        "operationId": "list_tenants_api_platform_tenants_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Tenants"
+      },
+      "post": {
+        "operationId": "create_tenant_api_platform_tenants_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TenantCreate"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Tenant"
+      }
+    },
+    "/api/platform/tenants/{tenant_id}": {
+      "get": {
+        "operationId": "get_tenant_api_platform_tenants__tenant_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Tenant"
+      }
+    },
+    "/api/platform/tenants/{tenant_id}/numbers": {
+      "post": {
+        "operationId": "assign_number_api_platform_tenants__tenant_id__numbers_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "tenant_id",
+            "required": true,
+            "schema": {
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NumberAssign"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Assign Number"
       }
     },
     "/api/settings": {

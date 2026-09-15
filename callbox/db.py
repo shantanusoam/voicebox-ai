@@ -32,6 +32,16 @@ PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
 CREATE TABLE IF NOT EXISTS migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS workspaces(id TEXT PRIMARY KEY, settings TEXT NOT NULL);
+-- A tenant IS a workspace. Every table below is already workspace-scoped, so
+-- tenancy is about routing a call to the right one and proving isolation,
+-- not about re-keying the schema.
+CREATE TABLE IF NOT EXISTS tenant_numbers(
+ id TEXT PRIMARY KEY, workspace TEXT NOT NULL REFERENCES workspaces(id),
+ e164 TEXT NOT NULL UNIQUE, provider TEXT NOT NULL, provider_number_id TEXT,
+ inbound INTEGER NOT NULL DEFAULT 1, outbound INTEGER NOT NULL DEFAULT 0,
+ caller_id_verified INTEGER NOT NULL DEFAULT 0,
+ status TEXT NOT NULL DEFAULT 'pending_kyc', created_at TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS tenant_numbers_workspace ON tenant_numbers(workspace);
 CREATE TABLE IF NOT EXISTS calls(
  id TEXT PRIMARY KEY, workspace TEXT NOT NULL REFERENCES workspaces(id), label TEXT NOT NULL,
  language TEXT NOT NULL, source TEXT NOT NULL, provider TEXT NOT NULL, status TEXT NOT NULL,
@@ -73,6 +83,7 @@ class Database:
         with self.lock:
             self.conn.executescript(SCHEMA)
             self.conn.execute('INSERT OR IGNORE INTO migrations VALUES(1,?)', (now_iso(),))
+            self.conn.execute('INSERT OR IGNORE INTO migrations VALUES(2,?)', (now_iso(),))
         self.create_workspace(workspace)
         self.execute("UPDATE devices SET status='offline'")
         # A process restart cannot silently resume a call or claim a live device.
@@ -108,11 +119,76 @@ class Database:
     def close(self):
         with self.lock: self.conn.close()
 
-    def create_workspace(self, workspace):
-        settings = dict(name='Willow Clinic', business='clinic', timezone='Asia/Kolkata',
-                        open_hour=10, close_hour=19, slot_minutes=30, fee=500,
-                        address='Demo address - replace before any pilot', staff_label='Front desk team')
+    DEFAULT_SETTINGS = dict(name='Willow Clinic', business='clinic', timezone='Asia/Kolkata',
+                            open_hour=10, close_hour=19, slot_minutes=30, fee=500,
+                            address='Demo address - replace before any pilot',
+                            staff_label='Front desk team',
+                            # Per-tenant voice persona. Each tenant sounds like itself.
+                            language='en', voice='alloy', greeting='', persona='')
+
+    def create_workspace(self, workspace, **overrides):
+        settings = {**self.DEFAULT_SETTINGS, **overrides}
         self.execute('INSERT OR IGNORE INTO workspaces VALUES(?,?)', (workspace, json.dumps(settings)))
+        return self.settings(workspace)
+
+    def workspaces(self):
+        rows = self.all('SELECT id,settings FROM workspaces ORDER BY id')
+        return [{'id': r['id'], **json.loads(r['settings'])} for r in rows]
+
+    def settings_or_none(self, workspace):
+        row = self.one('SELECT settings FROM workspaces WHERE id=?', (workspace,))
+        return json.loads(row['settings']) if row else None
+
+    # -- tenant numbers -------------------------------------------------
+    def add_number(self, workspace, e164, provider, inbound=True, outbound=False,
+                   status='pending_kyc', provider_number_id=None):
+        if not self.one('SELECT id FROM workspaces WHERE id=?', (workspace,)):
+            raise AppError(404, 'workspace_missing', 'Workspace not found.')
+        try:
+            self.execute('''INSERT INTO tenant_numbers(id,workspace,e164,provider,provider_number_id,
+                         inbound,outbound,caller_id_verified,status,created_at)
+                         VALUES(?,?,?,?,?,?,?,0,?,?)''',
+                         (ident('num'), workspace, e164, provider, provider_number_id,
+                          int(inbound), int(outbound), status, now_iso()))
+        except sqlite3.IntegrityError:
+            # One number routes to exactly one tenant, always.
+            raise AppError(409, 'number_taken', 'That number is already assigned to a tenant.')
+        self.event(workspace, 'number.assigned', f'{e164} via {provider}')
+        return self.number(e164)
+
+    def number(self, e164):
+        row = self.one('SELECT * FROM tenant_numbers WHERE e164=?', (e164,))
+        if not row:
+            return None
+        row['inbound'] = bool(row['inbound'])
+        row['outbound'] = bool(row['outbound'])
+        row['caller_id_verified'] = bool(row['caller_id_verified'])
+        return row
+
+    def numbers(self, workspace=None):
+        if workspace:
+            rows = self.all('SELECT * FROM tenant_numbers WHERE workspace=? ORDER BY created_at',
+                            (workspace,))
+        else:
+            rows = self.all('SELECT * FROM tenant_numbers ORDER BY workspace, created_at')
+        for r in rows:
+            r['inbound'] = bool(r['inbound'])
+            r['outbound'] = bool(r['outbound'])
+            r['caller_id_verified'] = bool(r['caller_id_verified'])
+        return rows
+
+    def set_number_status(self, e164, status=None, caller_id_verified=None, outbound=None):
+        row = self.number(e164)
+        if not row:
+            raise AppError(404, 'number_missing', 'Number not assigned to any tenant.')
+        if status is not None:
+            self.execute('UPDATE tenant_numbers SET status=? WHERE e164=?', (status, e164))
+        if caller_id_verified is not None:
+            self.execute('UPDATE tenant_numbers SET caller_id_verified=? WHERE e164=?',
+                         (int(caller_id_verified), e164))
+        if outbound is not None:
+            self.execute('UPDATE tenant_numbers SET outbound=? WHERE e164=?', (int(outbound), e164))
+        return self.number(e164)
 
     def settings(self, workspace):
         row = self.one('SELECT settings FROM workspaces WHERE id=?', (workspace,))

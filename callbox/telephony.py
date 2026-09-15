@@ -185,6 +185,36 @@ class AudioSocketLeg:
         self.outbound = bytearray()      # 24 kHz from the model, awaiting paced send
         self.sender = None
 
+    async def await_uuid(self, timeout=2.0):
+        """Read until the call's UUID frame arrives.
+
+        AudioSocket sends the UUID first and carries no dialled number, so the
+        UUID is the only key available to correlate this TCP connection with
+        the routing the dialplan registered for it.
+        """
+        deadline = asyncio.get_running_loop().time() + timeout
+        while self.call_uuid is None and not self.closed:
+            remaining = deadline - asyncio.get_running_loop().time()
+            if remaining <= 0:
+                return None
+            try:
+                chunk = await asyncio.wait_for(self.reader.read(4096), remaining)
+            except (asyncio.TimeoutError, ConnectionResetError):
+                return None
+            if not chunk:
+                self.closed = True
+                return None
+            for kind, payload in self.decoder.feed(chunk):
+                if kind == KIND_UUID:
+                    self.call_uuid = payload.hex()
+                elif kind == KIND_AUDIO and payload:
+                    wide = upsample_to_realtime(payload)
+                    await self.pending.put(json.dumps(
+                        {'type': 'audio', 'pcm16': base64.b64encode(wide).decode()}))
+                elif kind in (KIND_TERMINATE, KIND_ERROR):
+                    self.closed = True
+        return self.call_uuid
+
     # -- inbound (caller -> model) ------------------------------------
     async def receive_text(self):
         while True:
