@@ -1,25 +1,19 @@
-"""Full-duplex voice via the OpenAI Realtime API.
+"""Voice runtime entry point.
 
-The browser never sees the API key: it talks to this server over a WebSocket,
-and this module holds the upstream connection. Measured first-audio latency is
-under a second, against roughly seven seconds for the turn-based HTTP path.
+Two runtimes share the same deterministic tool boundary:
 
-The model owns speech, turn detection and barge-in. It does NOT own the data.
-Every fact it states and every write it performs goes through a tool call
-handled here against the same deterministic Agent/Database code the typed
-console uses, so a booking still requires an explicit confirmation step and a
-transactional availability recheck at commit. The model cannot invent a slot,
-skip the confirmation, or fabricate a completed action.
+* ``openai`` - native OpenAI Realtime full-duplex audio.
+* ``pipeline`` - local turn detection plus replaceable STT -> LLM -> TTS.
+
+The model owns conversation, never authoritative business data. Every fact and
+write crosses :mod:`callbox.orchestrator` before it can reach the database or a
+future MCP/API integration.
 """
 import asyncio
-import base64
 import contextlib
 import json
 import os
 import time
-
-# Set CALLBOX_REALTIME_DEBUG=1 to print every upstream event type.
-DEBUG = os.getenv('CALLBOX_REALTIME_DEBUG') == '1'
 
 from websockets.asyncio.client import connect
 
@@ -27,6 +21,7 @@ from .db import IST
 from .errors import AppError
 from .orchestrator import Orchestrator, ToolContext
 
+DEBUG = os.getenv('CALLBOX_REALTIME_DEBUG') == '1'
 REALTIME_URL = 'wss://api.openai.com/v1/realtime'
 
 LANGUAGE_RULES = {
@@ -64,10 +59,8 @@ Style: brief, warm, one question at a time. Spell names back before booking.
 Today is {today} in Asia/Kolkata. This is a test system using fictional data."""
 
 
-
-
 class RealtimeSession:
-    """Bridges one browser socket to one upstream Realtime conversation."""
+    """One native OpenAI Realtime conversation."""
 
     def __init__(self, db, agent, config, workspace, call_id, channel='browser',
                  orchestrator=None):
@@ -75,21 +68,18 @@ class RealtimeSession:
         self.workspace, self.call_id = workspace, call_id
         self.orchestrator = orchestrator or Orchestrator(db, config)
         self.context = ToolContext(workspace=workspace, call_id=call_id, channel=channel)
-        self.tool_log = []        # what the model actually invoked
+        self.tool_log = []
         self.greeted = False
         self.started = time.monotonic()
 
-    # -- tools ---------------------------------------------------------
     def settings(self):
         return self.db.settings(self.workspace)
 
     async def dispatch(self, name, arguments):
-        """Everything the model asks for goes through policy, never around it."""
         result = await self.orchestrator.execute(name, arguments or {}, self.context)
         self.tool_log.append({'tool': name, 'ok': not result.get('error'), 'result': result})
         return result
 
-    # -- upstream ------------------------------------------------------
     def session_config(self):
         from datetime import datetime
         settings = self.settings()
@@ -98,13 +88,18 @@ class RealtimeSession:
             'type': 'realtime',
             'output_modalities': ['audio'],
             'audio': {
-                'input': {'format': {'type': 'audio/pcm', 'rate': rate},
-                          'turn_detection': {'type': 'server_vad', 'create_response': True,
-                                             'silence_duration_ms': 500},
-                          'transcription': {'model': 'whisper-1'}},
-                'output': {'format': {'type': 'audio/pcm', 'rate': rate},
-                           # Each tenant's own voice, not one shared persona.
-                           'voice': settings.get('voice') or self.config.realtime_voice},
+                'input': {
+                    'format': {'type': 'audio/pcm', 'rate': rate},
+                    'turn_detection': {
+                        'type': 'server_vad', 'create_response': True,
+                        'silence_duration_ms': 500,
+                    },
+                    'transcription': {'model': 'whisper-1'},
+                },
+                'output': {
+                    'format': {'type': 'audio/pcm', 'rate': rate},
+                    'voice': settings.get('voice') or self.config.realtime_voice,
+                },
             },
             'instructions': INSTRUCTIONS.format(
                 business=settings.get('name', 'this business'),
@@ -117,9 +112,9 @@ class RealtimeSession:
         }}
 
     def connect_upstream(self):
-        if not self.config.realtime_available:
+        if not self.config.api_key:
             raise AppError(503, 'realtime_not_configured',
-                           'Set OPENAI_API_KEY on the server to use realtime voice.')
+                           'Set OPENAI_API_KEY on the server to use native realtime voice.')
         return connect(f'{REALTIME_URL}?model={self.config.realtime_model}',
                        additional_headers={'Authorization': 'Bearer ' + self.config.api_key},
                        max_size=16 * 1024 * 1024, ping_interval=20)
@@ -145,7 +140,6 @@ async def pump_browser_to_model(browser, upstream, session, on_event):
                 await upstream.send(json.dumps(
                     {'type': 'input_audio_buffer.append', 'audio': chunk}))
         elif kind == 'interrupt':
-            # Barge-in: stop the model talking immediately.
             await upstream.send(json.dumps({'type': 'response.cancel'}))
             await on_event({'type': 'playback.clear'})
         elif kind == 'end':
@@ -173,7 +167,6 @@ async def pump_model_to_browser(upstream, session, on_event):
         elif kind == 'response.output_audio_transcript.done':
             text = (event.get('transcript') or '').strip()
             if text and not session.greeted:
-                # agent.start() already recorded the greeting; do not duplicate it.
                 session.greeted = True
             elif text:
                 session.db.message(session.call_id, 'assistant', text)
@@ -184,10 +177,10 @@ async def pump_model_to_browser(upstream, session, on_event):
                 session.db.message(session.call_id, 'caller', text)
                 await on_event({'type': 'caller.said', 'text': text})
         elif kind == 'input_audio_buffer.speech_started':
-            # The caller started talking over the assistant.
             await on_event({'type': 'playback.clear'})
         elif kind == 'response.function_call_arguments.delta':
-            pending[event.get('call_id')] = pending.get(event.get('call_id'), '') + event.get('delta', '')
+            pending[event.get('call_id')] = (
+                pending.get(event.get('call_id'), '') + event.get('delta', ''))
         elif kind == 'response.function_call_arguments.done':
             call_id = event.get('call_id')
             name = event.get('name')
@@ -200,15 +193,15 @@ async def pump_model_to_browser(upstream, session, on_event):
             result = await session.dispatch(name, args)
             await on_event({'type': 'tool', 'tool': name, 'result': result})
             if session.context.phase != before:
-                # Dynamic tool routing: publish the next phase's tools before
-                # the model plans its following turn.
                 await upstream.send(json.dumps({'type': 'session.update', 'session': {
                     'type': 'realtime',
-                    'tools': session.orchestrator.published(session.context.phase)}}))
+                    'tools': session.orchestrator.published(session.context.phase),
+                }}))
                 await on_event({'type': 'phase', 'phase': session.context.phase})
             await upstream.send(json.dumps({'type': 'conversation.item.create', 'item': {
                 'type': 'function_call_output', 'call_id': call_id,
-                'output': json.dumps(result, default=str)}}))
+                'output': json.dumps(result, default=str),
+            }}))
             await upstream.send(json.dumps({'type': 'response.create'}))
         elif kind == 'error':
             detail = (event.get('error') or {}).get('message', '')
@@ -220,9 +213,9 @@ async def pump_model_to_browser(upstream, session, on_event):
             await on_event({'type': 'turn.done'})
 
 
-async def run(browser, db, agent, config, workspace, call_id, greeting,
-              channel='browser', orchestrator=None):
-    """Own one realtime conversation until either side hangs up."""
+async def _run_openai(browser, db, agent, config, workspace, call_id, greeting,
+                      channel='browser', orchestrator=None):
+    """Own one native OpenAI Realtime conversation until either side hangs up."""
     session = RealtimeSession(db, agent, config, workspace, call_id, channel, orchestrator)
     send_lock = asyncio.Lock()
 
@@ -231,14 +224,14 @@ async def run(browser, db, agent, config, workspace, call_id, greeting,
             await browser.send_json(payload)
 
     async with session.connect_upstream() as upstream:
-        await upstream.recv()                       # session.created
+        await upstream.recv()
         await upstream.send(json.dumps(session.session_config()))
         await emit({'type': 'ready', 'call_id': call_id,
                     'rate': config.realtime_rate, 'model': config.realtime_model,
                     'hardware_verified': False})
-        # Speak the disclosed greeting first, so the caller is never misled.
         await upstream.send(json.dumps({'type': 'response.create', 'response': {
-            'instructions': f'Greet the caller with exactly: "{greeting}"'}}))
+            'instructions': f'Greet the caller with exactly: "{greeting}"',
+        }}))
 
         up = asyncio.create_task(pump_browser_to_model(browser, upstream, session, emit))
         down = asyncio.create_task(pump_model_to_browser(upstream, session, emit))
@@ -252,3 +245,14 @@ async def run(browser, db, agent, config, workspace, call_id, greeting,
                 task.result()
     session.orchestrator.release(call_id)
     return session.tool_log
+
+
+async def run(browser, db, agent, config, workspace, call_id, greeting,
+              channel='browser', orchestrator=None):
+    """Dispatch to the configured voice runtime without changing transports."""
+    if getattr(config, 'voice_runtime_kind', 'openai') == 'pipeline':
+        from .pipeline_runtime import run as run_pipeline
+        return await run_pipeline(browser, db, agent, config, workspace, call_id, greeting,
+                                  channel=channel, orchestrator=orchestrator)
+    return await _run_openai(browser, db, agent, config, workspace, call_id, greeting,
+                             channel=channel, orchestrator=orchestrator)
