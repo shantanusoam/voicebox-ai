@@ -1,47 +1,173 @@
 # Architecture and implementation boundaries
 
-## One platform, separate transports
+## One business agent, multiple transports and voice runtimes
+
+CallBox separates **transport**, **voice runtime** and **business authority**.
+Changing a carrier or speech provider must not change booking rules, tenant
+routing or tool permissions.
 
 ```text
- Browser text --HTTP--\
- Browser mic  --HTTP---+--> FastAPI --> per-call agent --> scoped SQLite tools
- Device lab   --WS--- /          |             |              |
-                                |             |         bookings / requests
-                                |       optional provider
-                                |       STT / intent / TTS
-                                |
-                           PCM echo / output
-
- Phone + ESP32 HFP ---- NOT IMPLEMENTED ----> device protocol
- Carrier + PBX ------- NOT IMPLEMENTED ----> future adapter
+ Browser mic ---------------------------\
+                                         \
+ Softphone -> Asterisk -> AudioSocket ----+--> 24 kHz PCM media contract
+                                           |          |
+                                           |          v
+                                           |    VoiceRuntime selector
+                                           |      |            |
+                                           |      |            |
+                                           |   OpenAI       Pipeline
+                                           |   Realtime     STT -> LLM -> TTS
+                                           |      |            |
+                                           +------+------------+
+                                                  |
+                                                  v
+                                             Orchestrator
+                                      policy / schema / locks / audit
+                                                  |
+                                   +--------------+--------------+
+                                   |                             |
+                              deterministic DB            future MCP/API
+                                   |
+                              bookings / tasks
 ```
 
-`callbox/limits.py` owns the transport guard - host allowlist, origin checks, rate limiting and the JSON body cap - as plain ASGI middleware, so HTTP and WebSocket connections are policed identically. `callbox/main.py` owns HTTP authentication, validation, UI serving and lifecycle. `db.py` owns authoritative records and transactions. `agent.py` owns a small conversational state machine. `gateway.py` owns authenticated device connection state, epochs, input buffers and output cancellation. `providers.py` isolates external APIs behind one three-method interface, with `build_provider()` selecting the adapter named by `CALLBOX_PROVIDER`; no other module learns which provider is configured. No browser or model directly writes SQL.
+The local Asterisk path is implemented and can answer a SIP call from a
+softphone. It is still **not PSTN service**: there is no carrier, DID or licensed
+SIP trunk in this repository. See `telephony/README.md`.
 
-### Booking state
+## Voice runtime boundary
 
-`idle -> date -> displayed slot -> fictional name -> exact confirmation -> transactional commit -> idle`
+`callbox/realtime.py` is the runtime entry point. It selects one of two paths:
 
-Availability is not a reservation. The commit rechecks availability, opening hours, time range and the unique confirmed-slot constraint. When a competing call takes a slot, the caller receives newly available choices rather than a false confirmation. Request IDs bind to a payload hash and cache the authoritative response. Reusing an ID with different content is an error.
+- `CALLBOX_VOICE_RUNTIME=openai`: native OpenAI Realtime. OpenAI handles speech,
+  VAD/turn-taking and audio generation; CallBox handles tools and data.
+- `CALLBOX_VOICE_RUNTIME=pipeline`: local RMS VAD plus replaceable STT,
+  tool-calling LLM and TTS components from `callbox/component_providers.py`.
 
-Only the first six available slots are offered in the current conversation UI. The full local schedule is visible in the calendar. Date interpretation is limited to ISO dates, today/tomorrow and a few Hinglish phrases; `kal` is interpreted as tomorrow in this lab. Holiday calendars, multiple doctors, buffers, natural-language time preferences and external calendar synchronization are not implemented.
+Both paths publish the same orchestrator tools and produce/consume the same PCM
+transport events. The browser and SIP bridge therefore do not need provider
+specific business logic.
 
-### Persistence
+The pipeline is currently sequential STT -> LLM -> TTS. Its input reader stays
+active so caller speech can clear queued playback and suppress stale output, but
+an upstream HTTP request already sent cannot be cancelled or un-billed. It is a
+cost experiment, not yet a production full-duplex claim.
 
-SQLite schema version 1 contains workspaces, sessions, devices, calls, messages, appointments, tasks, events and idempotency results. Foreign keys and WAL are enabled. Local transactions and a unique index protect bookings. Records are scoped to the configured workspace. This single-workspace release is not proof of secure commercial multi-tenancy.
+## Tool authority
 
-### Audio and paid work
+`callbox/orchestrator.py` is the trust boundary between a model and business
+data. A model can request an action; it cannot perform one directly.
 
-Browser microphone input is one bounded recording per HTTP request. WebSocket input is fixed PCM frames committed as a turn. The gateway sends generated WAV speech as normalized PCM frames, at nominal 20 ms spacing. Resampling uses a laboratory linear interpolator - with integer decimation for exact-multiple rates - and runs on a worker thread, because inline execution stalled the event loop for every other call. It is not a production DSP implementation. There is no acoustic echo cancellation, codec negotiation, voice activity detection, automatic turn endpointing or tested full-duplex speech.
+```text
+Model: book_appointment(...)
+            |
+            v
+      Orchestrator
+      - risk tier
+      - argument schema
+      - write serialization
+      - phase routing
+      - execution
+      - audit event
+            |
+            v
+      deterministic handler
+```
 
-Paid audio requests are serialized per session. A cached retry returns the stored text/actions without generating speech again. The cache is written after the authoritative turn, before TTS. A request cancelled while upstream transcription is in flight may still incur provider charges; the local application cannot reverse upstream billing. A process crash between an external API response and local cache persistence can also require reconciliation.
+Open tools disclose no existing-patient data. Verified tools read or mutate an
+existing record and require confirmed identity. Caller ID is never treated as
+identity. Writes are serialized per call so `hold_slot -> confirm_booking`
+remains ordered even if a model asks for parallel tool calls.
 
-### Cancellation and recovery
+Tool phases are additive. A phase exposes entry-point tools plus the small set
+unlocked by the current task; it never strands a caller who changes subject.
 
-Interruption increments the epoch, clears captured input and cancels current output work. Devices must discard stale epochs and clear playback on their side. Completed booking commits survive interruption. A dropped gateway connection ends its active test call; it does not recover a physical handset or place a fallback call. Restart recovery marks active tests ended and devices offline. UI history can resume an active browser call or end it explicitly.
+For MCP, keep the same boundary: expose an ordinary function tool to the model,
+validate/authorize it here, then let the handler speak MCP downstream. Direct
+model-to-MCP mutation would move approval and audit outside this trust boundary.
 
-### Operational envelope
+## Multi-tenancy and numbers
 
-One process, one workspace, loopback-only default. Twelve simultaneous active test sessions, 30-minute maximum call/connection age, 80 conversational turns, 45-second gateway idle timeout, 15-second gateway input buffer, 4 MB browser-upload cap, 64 KB JSON-body cap, and gateway message-size/rate checks. These are lab bounds, not benchmarked production capacity. There is no automatic idle-browser-session reaper: end an abandoned session from its history record.
+A tenant is a workspace. `tenant_numbers` maps an authorized number to exactly
+one tenant and stores provider, provider number id, inbound/outbound flags,
+caller-ID verification and KYC state.
 
-Do not put multiple Uvicorn workers behind this SQLite state model and claim distributed consistency: device ownership, per-call locks and rate limits are process-local. A scale-out version needs a deliberate ownership, persistence, media routing and admission-control design.
+```text
++918000001001 -> aarogya-clinic
++918000001002 -> sunrise-dental
+```
+
+Inbound carrier number formats are normalized before lookup. Unknown or
+inactive numbers are refused rather than defaulted to another tenant. Each
+tenant has its own language, voice, greeting and persona.
+
+The SIP AudioSocket payload has no dialled number, so the Asterisk dialplan
+registers `uuid -> called/caller` out-of-band before the media socket connects.
+The bridge correlates the media leg by UUID.
+
+Outbound caller ID must be authorized by the carrier/provider. The local number
+service refuses outbound use unless the number is explicitly enabled and marked
+verified. Caller-ID name/CNAM is separate and should not be assumed for India.
+
+## Audio contracts
+
+The browser/realtime internal media contract is mono PCM16 at 24 kHz. The
+Asterisk lab receives 8 kHz narrowband signed-linear audio and converts it at
+the transport boundary. Upsampling satisfies a 24 kHz API contract but does not
+restore frequency information lost by a telephone channel.
+
+Names, phone digits and dates must therefore be read back before authoritative
+writes. DTMF is captured by the SIP bridge as a reliable fallback for digits.
+
+The low-cost pipeline's local endpointer uses configurable RMS energy and a
+short pre-roll. This is deliberately simple and must be benchmarked on actual
+browser microphones and telephone noise before production.
+
+## Persistence and consistency
+
+SQLite is authoritative for this development lab. Foreign keys and WAL are
+enabled; booking commit rechecks availability and the unique slot constraint.
+Idempotency records protect retries.
+
+Process-local state still includes call locks, rate/admission state and media
+ownership. Running multiple Uvicorn workers does **not** make this distributed.
+Production scale-out requires a deliberate move such as:
+
+```text
+voice workers
+    |
+    +---- Redis: call ownership, distributed locks, pub/sub, queues
+    |
+    `---- Postgres: tenants, numbers, calls, bookings, audit, usage
+```
+
+That migration is a production milestone, not something this SQLite lab claims
+to have already solved.
+
+## Cancellation and recovery
+
+Barge-in clears queued playback. In the native runtime the upstream response is
+also cancelled; in the component pipeline stale output is suppressed but an
+HTTP request already accepted upstream may still finish and be billed.
+Completed deterministic writes are never rolled back merely because the caller
+interrupts later.
+
+A dropped gateway connection ends its active test call. Restart recovery marks
+active tests ended and devices offline. There is no physical handset recovery,
+carrier failover or public deployment guarantee yet.
+
+## Current operational envelope
+
+The repository remains a development laboratory:
+
+- one process and SQLite by default;
+- local SIP transport proof, no PSTN carrier;
+- no production RBAC or isolation certification;
+- no production monitoring/billing;
+- no live WhatsApp/SMS or Google Calendar integration;
+- no medical decision-making;
+- provider credentials stay server-side and paid tests require deliberate
+  configuration/consent.
+
+See `docs/VOICE-RUNTIME.md`, `docs/ORCHESTRATION.md`, `docs/TENANCY.md` and
+`telephony/README.md` for the boundaries of each layer.
