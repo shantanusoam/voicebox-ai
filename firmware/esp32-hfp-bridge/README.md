@@ -12,7 +12,7 @@ and is not verified.
 | Project | Proves | Status |
 |---|---|---|
 | `callbox_dev/` | On-device synthetic loopback: Wi-Fi + authenticated WebSocket + `callbox.v1` framing, byte-exact echo verification, interruption, call.end | Passed on hardware, verified server-side (`qa/` evidence in repo root branch) |
-| `callbox_hfp/` | Real phone audio: HFP/mSBC <-> PCM16k <-> WebSocket <-> server (echo mode). Agent mode (STT/tools/TTS) is wired but unverified on hardware | Echo path passed on hardware; one stack-overflow bug found and fixed; agent-mode test pending |
+| `callbox_hfp/` | Real phone audio. `local_echo` proves HFP/SCO without Wi-Fi; `echo` adds PCM/WebSocket/server loopback; `agent` adds STT/tools/TTS | HFP pairing + mSBC negotiation verified. Sustained network echo is currently unstable on the lab board; use `local_echo` first to isolate Bluetooth from Wi-Fi coexistence. |
 
 ## Architecture (callbox_hfp)
 
@@ -42,7 +42,7 @@ idf.py set-target esp32
 # then set locally, NOT in any committed file (see secrets note):
 #   sdkconfig: CONFIG_CB_WIFI_SSID / CONFIG_CB_WIFI_PASS
 #   sdkconfig: CONFIG_CB_SERVER_URI / CONFIG_CB_DEVICE_ID / CONFIG_CB_DEVICE_TOKEN
-#   sdkconfig: CONFIG_CB_CALL_MODE ("echo" or "agent")
+#   sdkconfig: CONFIG_CB_CALL_MODE ("local_echo", "echo" or "agent")
 idf.py build
 ```
 
@@ -87,3 +87,17 @@ is shown once.
 - No sample-clock pacing of network TX beyond the SCO arrival rate; no jitter
   measurement; no long-call soak test; no Wi-Fi loss/roaming failure tests.
 - Echo cancellation: the phone's AG handles echo; there is no local AEC.
+
+
+## Voice/echo troubleshooting order
+
+If the phone pairs but you cannot hear the echo, do not start with the AI path.
+Use the three modes in this order:
+
+1. **\`local_echo\`** — no Wi-Fi, WebSocket, JSON, PCM conversion or SBC re-encode. The firmware buffers encoded mSBC packets and returns them to the phone using the same external-codec pattern as Espressif's HFP HF example. Speak from the *remote side of the phone call* and listen for that speech to come back. Logs report SCO RX/TX packet statistics.
+2. **\`echo\`** — enables the complete HFP -> PCM -> WebSocket -> server -> PCM -> mSBC path. If local echo works but this fails, focus on Wi-Fi/Bluetooth coexistence and network scheduling, not pairing or the phone's HFP negotiation.
+3. **\`agent\`** — only after echo is stable.
+
+The firmware disables Wi-Fi modem sleep in network modes to avoid extra latency while Classic Bluetooth SCO and Wi-Fi share the ESP32's 2.4 GHz radio. It also stops Bluetooth inquiry discoverability after the HFP service-level connection is established while remaining reconnectable.
+
+For a local-echo test set \`CONFIG_CB_CALL_MODE="local_echo"\`, rebuild and flash. You do **not** need the CallBox server or Wi-Fi credentials for that mode. Watch for \`LOCAL_ECHO\` and \`SCO PKTS\` log lines. A high \`rx_none/rx_lost\` count means the SCO radio path itself is unhealthy; good RX/TX counters with audible local echo but failing network echo points at Wi-Fi/WebSocket coexistence.
