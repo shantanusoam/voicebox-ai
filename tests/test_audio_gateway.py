@@ -3,7 +3,7 @@ import io
 import json
 import wave
 import pytest
-from callbox.audio import AudioBuffer, FRAME_BYTES, MAX_TURN_BYTES, to_wav, wav_to_pcm16
+from callbox.audio import AudioBuffer, FRAME_BYTES, MAX_TURN_BYTES, pack_audio_batch, unpack_audio_batch, to_wav, wav_to_pcm16
 from callbox.errors import AppError
 
 
@@ -30,6 +30,17 @@ def test_resample_8k_to16k():
 
 def test_invalid_wav():
     with pytest.raises(AppError):wav_to_pcm16(b'not a WAV')
+
+
+def test_binary_audio_batch_roundtrip():
+    frames=[bytes([n])*FRAME_BYTES for n in range(4)]
+    payload=pack_audio_batch(frames, first_seq=7, epoch=3)
+    decoded=unpack_audio_batch(payload)
+    assert decoded['first_seq']==7 and decoded['epoch']==3 and decoded['frames']==frames
+
+def test_binary_audio_batch_rejects_bad_length():
+    payload=pack_audio_batch([b'\0'*FRAME_BYTES], first_seq=0)
+    with pytest.raises(AppError):unpack_audio_batch(payload[:-1])
 
 def test_audio_interrupt_discards_input_and_increments_epoch():
     b=AudioBuffer();b.add(frame());assert len(b.data)==640
@@ -75,6 +86,21 @@ def test_gateway_echo_and_interrupt(client,db):
     assert db.call('clinic-demo',cid)['status']=='ended'
     assert db.devices('clinic-demo')[0]['status']=='offline'
     assert db.devices('clinic-demo')[0]['frames']==11
+
+def test_gateway_accepts_binary_audio_batch(client,db):
+    d=provision(client)
+    with client.websocket_connect('/ws/device') as ws:
+        assert hello(ws,d)['type']=='ready'
+        cid=start(ws)
+        frames=[b'\x12\x00'*320 for _ in range(4)]
+        ws.send_bytes(pack_audio_batch(frames, first_seq=0, epoch=0))
+        for n in range(4):
+            out=ws.receive_json()
+            assert out['type']=='audio.output' and out['seq']==n
+            assert base64.b64decode(out['pcm16'])==frames[n]
+        ws.send_json({'type':'call.end','call_id':cid})
+        assert ws.receive_json()['type']=='call.ended'
+    assert db.devices('clinic-demo')[0]['frames']==4
 
 def test_gateway_rejects_cross_call_frames(client):
     d=provision(client)
