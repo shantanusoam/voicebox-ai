@@ -45,10 +45,12 @@ static esp_websocket_client_handle_t s_ws;
 static char s_call_id[64];
 static volatile bool s_call_active;      /* call.started received */
 static volatile bool s_audio_up;         /* BT mSBC audio connected */
-static volatile bool s_turn_pending;     /* agent: commit sent, awaiting turn.done */
-static volatile bool s_pending_call_start; /* deferred out of the BT callback, see bridge_on_audio_up */
-static volatile bool s_pending_call_end;   /* deferred out of the BT callback, see bridge_on_audio_down */
-static char s_pending_call_end_id[64];     /* call_id snapshot, BT callback cannot touch s_ws itself */
+static volatile bool s_turn_pending;       /* agent: commit sent, awaiting turn.done */
+static volatile bool s_commit_requested;    /* agent: end-of-turn seen; drain audio then commit */
+static char s_pending_commit_id[40];
+static volatile bool s_pending_call_start;  /* retry until the request is actually submitted */
+static volatile bool s_pending_call_end;    /* retry until the request is actually submitted */
+static char s_pending_call_end_id[64];
 static uint32_t s_tx_seq, s_out_epoch;
 static uint32_t s_turn_counter;
 
@@ -115,61 +117,84 @@ static int16_t frame_rms_dbish(const uint8_t *pcm)
 }
 
 /* ---------- WS receive pump state ---------- */
-#define RXQ_LEN 20
+#define RXQ_LEN 24
 typedef struct { uint8_t *data; size_t len; } rx_msg;
 static QueueHandle_t s_rxq;
 static uint8_t s_accum[8192];
 static size_t s_accum_len;
+static uint32_t s_rxq_drop, s_rx_alloc_fail;
+
+/* Binary PCM batch protocol shared with callbox.audio:
+ * >4sBBHII : magic, frame_count, flags, frame_bytes, first_seq, epoch.
+ * Four 20 ms frames amortize JSON/base64/WebSocket overhead while adding at
+ * most ~60 ms of uplink batching latency. */
+#define AUDIO_BATCH_MAX_FRAMES 4u
+#define AUDIO_BATCH_HEADER_BYTES 16u
+#define AUDIO_BATCH_WAIT_MS 60u
+static uint8_t s_audio_batch[AUDIO_BATCH_HEADER_BYTES + AUDIO_BATCH_MAX_FRAMES * CB_FRAME_BYTES];
+
+static void put_be16(uint8_t *p, uint16_t v) { p[0] = (uint8_t)(v >> 8); p[1] = (uint8_t)v; }
+static void put_be32(uint8_t *p, uint32_t v) {
+    p[0] = (uint8_t)(v >> 24); p[1] = (uint8_t)(v >> 16);
+    p[2] = (uint8_t)(v >> 8);  p[3] = (uint8_t)v;
+}
 
 /* Important esp_websocket_client semantic: an expired write timeout is not a
  * harmless per-frame drop. transport_poll_write() returning 0 is treated as a
  * fatal transport error and the client tears the WebSocket down. Real hardware
  * reproduced this ~90 ms after call.start when audio used a 15 ms deadline.
- * Therefore audio writes below deliberately use portMAX_DELAY; the client's
- * own network_timeout_ms still bounds a genuinely dead transport. */
+ *
+ * portMAX_DELAY maps to an infinite transport timeout in the vendored client,
+ * so it is not a complete dead-link solution either. We keep it here to avoid
+ * corrupting/aborting a partially emitted WebSocket frame, and reduce pressure
+ * structurally with binary batching. Connection recovery is handled by the
+ * explicit SCO/WS state below. */
 static bool send_text_timeout(const char *str, TickType_t timeout)
 {
     return s_ws && esp_websocket_client_send_text(s_ws, str, strlen(str), timeout) >= 0;
 }
 
-static void send_text(const char *str)
+static bool send_text(const char *str)
 {
     /* Control writes use the same rule as audio: a short application timeout
      * is connection-fatal in esp_websocket_client, not a harmless retry. */
-    (void)send_text_timeout(str, portMAX_DELAY);
+    return send_text_timeout(str, portMAX_DELAY);
 }
 
-static uint32_t s_net_send_drop; /* failed audio submissions to the WS client */
+static uint32_t s_net_send_drop;
 
-static bool send_audio_frame(const uint8_t *pcm, uint32_t seq)
+static bool send_audio_batch(cb_frame *frames, size_t count, uint32_t first_seq)
 {
-    static unsigned char b64[((CB_FRAME_BYTES + 2) / 3) * 4 + 1]; /* single net-tx writer */
-    static char msg[4096];
-    size_t b64_len = 0;
-    if (mbedtls_base64_encode(b64, sizeof(b64), &b64_len, pcm, CB_FRAME_BYTES) != 0) {
+    if (!s_ws || count == 0 || count > AUDIO_BATCH_MAX_FRAMES) return false;
+    uint8_t *p = s_audio_batch;
+    memcpy(p, "CBA1", 4);
+    p[4] = (uint8_t)count;
+    p[5] = 0; /* flags */
+    put_be16(p + 6, CB_FRAME_BYTES);
+    put_be32(p + 8, first_seq);
+    put_be32(p + 12, 0); /* capture epoch; v1 stays zero */
+    for (size_t i = 0; i < count; ++i) {
+        memcpy(p + AUDIO_BATCH_HEADER_BYTES + i * CB_FRAME_BYTES,
+               frames[i].data, CB_FRAME_BYTES);
+    }
+    int bytes = AUDIO_BATCH_HEADER_BYTES + (int)(count * CB_FRAME_BYTES);
+    int sent = esp_websocket_client_send_bin(
+        s_ws, (const char *)s_audio_batch, bytes, portMAX_DELAY);
+    if (sent != bytes) {
+        s_net_send_drop += (uint32_t)count;
         return false;
     }
-
-    int n = snprintf(msg, sizeof(msg),
-        "{\"type\":\"audio\",\"call_id\":\"%s\",\"seq\":%" PRIu32
-        ",\"epoch\":0,\"sample_rate\":16000,\"channels\":1,\"pcm16\":\"%s\"}",
-        s_call_id, seq, b64);
-    if (n <= 0 || n >= (int)sizeof(msg)) return false;
-
-    /* DO NOT replace this with a short deadline. A 15 ms timeout caused
-     * transport_poll_write(0) and esp_websocket_client disconnected the whole
-     * session. Backpressure is absorbed by the bounded input ring instead. */
-    return send_text_timeout(msg, portMAX_DELAY);
+    return true;
 }
 
-static void send_simple(const char *fmt, ...)
+static bool send_simple(const char *fmt, ...)
 {
     char buf[256];
     va_list ap;
     va_start(ap, fmt);
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
-    send_text(buf);
+    return send_text(buf);
 }
 
 static void handle_message(const char *msg, size_t len)
@@ -187,6 +212,8 @@ static void handle_message(const char *msg, size_t len)
         s_tx_seq = 0;
         s_call_active = true;
         s_turn_pending = false;
+        s_commit_requested = false;
+        s_pending_commit_id[0] = '\0';
         ESP_LOGI(TAG, "CALL_STARTED id=%s", s_call_id);
     } else if (strcmp(type, "audio.output") == 0) {
         cJSON *pcm = cJSON_GetObjectItem(root, "pcm16");
@@ -217,6 +244,8 @@ static void handle_message(const char *msg, size_t len)
         ESP_LOGI(TAG, "TURN_RESULT: %s", text ? text : "(none)");
     } else if (strcmp(type, "turn.done") == 0) {
         s_turn_pending = false;
+        s_commit_requested = false;
+        s_pending_commit_id[0] = '\0';
         s_speech_frames = s_silence_frames = s_collected = 0;
         ESP_LOGI(TAG, "TURN_DONE");
     } else if (strcmp(type, "call.ended") == 0) {
