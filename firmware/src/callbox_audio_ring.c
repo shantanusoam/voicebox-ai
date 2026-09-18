@@ -17,6 +17,7 @@ bool cb_ring_push(cb_audio_ring *ring, const uint8_t *pcm, size_t bytes,
     frame->epoch = epoch;
     ring->write_index = (ring->write_index + 1u) % CB_RING_CAPACITY;
     ring->count++;
+    if (ring->count > ring->high_water) ring->high_water = ring->count;
     return true;
 }
 bool cb_ring_pop(cb_audio_ring *ring, cb_frame *output) {

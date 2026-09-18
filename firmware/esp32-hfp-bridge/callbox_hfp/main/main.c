@@ -45,11 +45,14 @@ static esp_websocket_client_handle_t s_ws;
 static char s_call_id[64];
 static volatile bool s_call_active;      /* call.started received */
 static volatile bool s_audio_up;         /* BT mSBC audio connected */
-static volatile bool s_turn_pending;     /* agent: commit sent, awaiting turn.done */
-static volatile bool s_pending_call_start; /* deferred out of the BT callback, see bridge_on_audio_up */
-static volatile bool s_pending_call_end;   /* deferred out of the BT callback, see bridge_on_audio_down */
-static char s_pending_call_end_id[64];     /* call_id snapshot, BT callback cannot touch s_ws itself */
-static uint32_t s_tx_seq, s_out_epoch;
+static volatile bool s_turn_pending;       /* agent: commit sent, awaiting turn.done */
+static volatile bool s_commit_requested;    /* agent: end-of-turn seen; drain audio then commit */
+static char s_pending_commit_id[40];
+static volatile bool s_pending_call_start;  /* retry until the request is actually submitted */
+static volatile bool s_call_start_inflight; /* submitted; waiting for call.started */
+static volatile bool s_pending_call_end;    /* retry until the request is actually submitted */
+static char s_pending_call_end_id[64];
+static uint32_t s_tx_seq, s_out_epoch, s_capture_epoch;
 static uint32_t s_turn_counter;
 
 /* rings (external sync required by the ring contract) */
@@ -115,61 +118,85 @@ static int16_t frame_rms_dbish(const uint8_t *pcm)
 }
 
 /* ---------- WS receive pump state ---------- */
-#define RXQ_LEN 20
+#define RXQ_LEN 24
+#define CTRL_RXQ_LEN 12
 typedef struct { uint8_t *data; size_t len; } rx_msg;
-static QueueHandle_t s_rxq;
+static QueueHandle_t s_rxq, s_ctrl_rxq;
 static uint8_t s_accum[8192];
 static size_t s_accum_len;
+static uint32_t s_rxq_drop, s_ctrl_rxq_drop, s_rx_alloc_fail;
+
+/* Binary PCM batch protocol shared with callbox.audio:
+ * >4sBBHII : magic, frame_count, flags, frame_bytes, first_seq, epoch.
+ * Four 20 ms frames amortize JSON/base64/WebSocket overhead while adding at
+ * most ~60 ms of uplink batching latency. */
+#define AUDIO_BATCH_MAX_FRAMES 4u
+#define AUDIO_BATCH_HEADER_BYTES 16u
+#define AUDIO_BATCH_WAIT_MS 60u
+static uint8_t s_audio_batch[AUDIO_BATCH_HEADER_BYTES + AUDIO_BATCH_MAX_FRAMES * CB_FRAME_BYTES];
+
+static void put_be16(uint8_t *p, uint16_t v) { p[0] = (uint8_t)(v >> 8); p[1] = (uint8_t)v; }
+static void put_be32(uint8_t *p, uint32_t v) {
+    p[0] = (uint8_t)(v >> 24); p[1] = (uint8_t)(v >> 16);
+    p[2] = (uint8_t)(v >> 8);  p[3] = (uint8_t)v;
+}
 
 /* Important esp_websocket_client semantic: an expired write timeout is not a
  * harmless per-frame drop. transport_poll_write() returning 0 is treated as a
  * fatal transport error and the client tears the WebSocket down. Real hardware
  * reproduced this ~90 ms after call.start when audio used a 15 ms deadline.
- * Therefore audio writes below deliberately use portMAX_DELAY; the client's
- * own network_timeout_ms still bounds a genuinely dead transport. */
+ *
+ * portMAX_DELAY maps to an infinite transport timeout in the vendored client,
+ * so it is not a complete dead-link solution either. We keep it here to avoid
+ * corrupting/aborting a partially emitted WebSocket frame, and reduce pressure
+ * structurally with binary batching. Connection recovery is handled by the
+ * explicit SCO/WS state below. */
 static bool send_text_timeout(const char *str, TickType_t timeout)
 {
     return s_ws && esp_websocket_client_send_text(s_ws, str, strlen(str), timeout) >= 0;
 }
 
-static void send_text(const char *str)
+static bool send_text(const char *str)
 {
     /* Control writes use the same rule as audio: a short application timeout
      * is connection-fatal in esp_websocket_client, not a harmless retry. */
-    (void)send_text_timeout(str, portMAX_DELAY);
+    return send_text_timeout(str, portMAX_DELAY);
 }
 
-static uint32_t s_net_send_drop; /* failed audio submissions to the WS client */
+static uint32_t s_net_send_drop;
 
-static bool send_audio_frame(const uint8_t *pcm, uint32_t seq)
+static bool send_audio_batch(cb_frame *frames, size_t count, uint32_t first_seq)
 {
-    static unsigned char b64[((CB_FRAME_BYTES + 2) / 3) * 4 + 1]; /* single net-tx writer */
-    static char msg[4096];
-    size_t b64_len = 0;
-    if (mbedtls_base64_encode(b64, sizeof(b64), &b64_len, pcm, CB_FRAME_BYTES) != 0) {
+    if (!s_ws || count == 0 || count > AUDIO_BATCH_MAX_FRAMES) return false;
+    uint8_t *p = s_audio_batch;
+    memcpy(p, "CBA1", 4);
+    p[4] = (uint8_t)count;
+    p[5] = 0; /* flags */
+    put_be16(p + 6, CB_FRAME_BYTES);
+    put_be32(p + 8, first_seq);
+    put_be32(p + 12, s_capture_epoch);
+    for (size_t i = 0; i < count; ++i) {
+        memcpy(p + AUDIO_BATCH_HEADER_BYTES + i * CB_FRAME_BYTES,
+               frames[i].data, CB_FRAME_BYTES);
+    }
+    int bytes = AUDIO_BATCH_HEADER_BYTES + (int)(count * CB_FRAME_BYTES);
+    int sent = esp_websocket_client_send_bin(
+        s_ws, (const char *)s_audio_batch, bytes, portMAX_DELAY);
+    if (sent != bytes) {
+        s_net_send_drop += (uint32_t)count;
         return false;
     }
-
-    int n = snprintf(msg, sizeof(msg),
-        "{\"type\":\"audio\",\"call_id\":\"%s\",\"seq\":%" PRIu32
-        ",\"epoch\":0,\"sample_rate\":16000,\"channels\":1,\"pcm16\":\"%s\"}",
-        s_call_id, seq, b64);
-    if (n <= 0 || n >= (int)sizeof(msg)) return false;
-
-    /* DO NOT replace this with a short deadline. A 15 ms timeout caused
-     * transport_poll_write(0) and esp_websocket_client disconnected the whole
-     * session. Backpressure is absorbed by the bounded input ring instead. */
-    return send_text_timeout(msg, portMAX_DELAY);
+    return true;
 }
 
-static void send_simple(const char *fmt, ...)
+static bool send_simple(const char *fmt, ...)
 {
     char buf[256];
     va_list ap;
     va_start(ap, fmt);
     vsnprintf(buf, sizeof(buf), fmt, ap);
     va_end(ap);
-    send_text(buf);
+    return send_text(buf);
 }
 
 static void handle_message(const char *msg, size_t len)
@@ -181,12 +208,20 @@ static void handle_message(const char *msg, size_t len)
 
     if (strcmp(type, "ready") == 0) {
         ESP_LOGI(TAG, "READY (device authenticated)");
+        /* Automatic WS reconnect must re-bind an already-live SCO call to a
+         * fresh server call. The old server connection finalizes its call on
+         * disconnect, so call.start is the recovery operation. */
+        if (s_audio_up && !s_call_active && !s_call_start_inflight) s_pending_call_start = true;
     } else if (strcmp(type, "call.started") == 0) {
         const char *cid = cJSON_GetStringValue(cJSON_GetObjectItem(root, "call_id"));
         snprintf(s_call_id, sizeof(s_call_id), "%s", cid ? cid : "");
         s_tx_seq = 0;
+        s_capture_epoch = 0;
+        s_call_start_inflight = false;
         s_call_active = true;
         s_turn_pending = false;
+        s_commit_requested = false;
+        s_pending_commit_id[0] = '\0';
         ESP_LOGI(TAG, "CALL_STARTED id=%s", s_call_id);
     } else if (strcmp(type, "audio.output") == 0) {
         cJSON *pcm = cJSON_GetObjectItem(root, "pcm16");
@@ -206,6 +241,10 @@ static void handle_message(const char *msg, size_t len)
     } else if (strcmp(type, "playback.clear") == 0) {
         cJSON *ep = cJSON_GetObjectItem(root, "epoch");
         s_out_epoch = (ep && cJSON_IsNumber(ep)) ? (uint32_t)ep->valuedouble : s_out_epoch + 1;
+        /* playback.clear is the server's epoch barrier. Keep future microphone
+         * audio on the same epoch so a barge-in does not make all subsequent
+         * capture stale at AudioBuffer.add(). */
+        s_capture_epoch = s_out_epoch;
         lock_take(s_out_lock);
         cb_ring_interrupt(&s_out_ring, s_out_epoch);
         lock_give(s_out_lock);
@@ -217,6 +256,8 @@ static void handle_message(const char *msg, size_t len)
         ESP_LOGI(TAG, "TURN_RESULT: %s", text ? text : "(none)");
     } else if (strcmp(type, "turn.done") == 0) {
         s_turn_pending = false;
+        s_commit_requested = false;
+        s_pending_commit_id[0] = '\0';
         s_speech_frames = s_silence_frames = s_collected = 0;
         ESP_LOGI(TAG, "TURN_DONE");
     } else if (strcmp(type, "call.ended") == 0) {
@@ -253,9 +294,8 @@ static void codec_in_task(void *arg)
             continue;
         }
 
-        /* agent mode: drop input while a generated turn is in flight */
-        bool collect = s_call_active && !s_turn_pending &&
-                       strcmp(CONFIG_CB_CALL_MODE, "agent") == 0;
+        bool agent_mode = strcmp(CONFIG_CB_CALL_MODE, "agent") == 0;
+        bool collect = s_call_active && agent_mode && !s_turn_pending && !s_commit_requested;
 
         /* append to assembly and emit 640-byte wire frames */
         size_t off = 0;
@@ -270,6 +310,7 @@ static void codec_in_task(void *arg)
                 memmove(s_asm, s_asm + CB_FRAME_BYTES, s_asm_len - CB_FRAME_BYTES);
                 s_asm_len -= CB_FRAME_BYTES;
 
+                bool request_commit = false;
                 if (collect) {
                     int16_t r = frame_rms_dbish(frame);
                     if (r > CONFIG_CB_VAD_THRESHOLD) {
@@ -281,26 +322,33 @@ static void codec_in_task(void *arg)
                         s_silence_frames++;
                     }
                     if (s_speech_frames >= 2) s_collected++;
-                    if (s_collected >= 5 && s_collected >= 5 &&
+                    if (s_collected >= 5 &&
                         (s_silence_frames >= 40 || s_collected >= 750)) {
-                        s_turn_pending = true;
-                        char rid[40];
-                        snprintf(rid, sizeof(rid), "turn-%" PRIu32, ++s_turn_counter);
-                        send_simple("{\"type\":\"audio.commit\",\"call_id\":\"%s\",\"request_id\":\"%s\"}",
-                                    s_call_id, rid);
-                        ESP_LOGI(TAG, "COMMIT %s after %d frames", rid, s_collected);
-                        s_speech_frames = s_silence_frames = s_collected = 0;
+                        snprintf(s_pending_commit_id, sizeof(s_pending_commit_id),
+                                 "turn-%" PRIu32, ++s_turn_counter);
+                        request_commit = true;
                     }
                 }
 
-                /* Sequence numbers belong to the transport, not capture.
-                 * The bounded ring may legitimately reject frames under
-                 * backpressure. Numbering here used to advance even when
-                 * cb_ring_push() failed, permanently poisoning the server's
-                 * strict sequence checker after the first overflow. */
-                lock_take(s_in_lock);
-                (void)cb_ring_push(&s_in_ring, frame, CB_FRAME_BYTES, 0, 0);
-                lock_give(s_in_lock);
+                /* Do not queue pre-call audio, generated-turn audio, or audio
+                 * after an end-of-turn marker. The frame that triggered the
+                 * commit is queued first; net_tx_task sends the commit only
+                 * after this ring drains, preserving speech-before-commit
+                 * ordering on the wire. */
+                bool should_queue = s_call_active && !s_turn_pending && !s_commit_requested;
+                if (should_queue) {
+                    lock_take(s_in_lock);
+                    (void)cb_ring_push(&s_in_ring, frame, CB_FRAME_BYTES, 0, 0);
+                    lock_give(s_in_lock);
+                }
+
+                if (request_commit) {
+                    s_commit_requested = true;
+                    ESP_LOGI(TAG, "COMMIT_QUEUED %s after %d frames",
+                             s_pending_commit_id, s_collected);
+                    s_speech_frames = s_silence_frames = s_collected = 0;
+                    collect = false;
+                }
             }
         }
     }
@@ -336,51 +384,97 @@ static void stats_task(void *arg)
         lock_take(s_out_lock);
         out_dropped = s_out_ring.dropped; out_under = s_out_ring.underflows;
         lock_give(s_out_lock);
-        ESP_LOGI(TAG, "STATS msbc_fail=%" PRIu32 " net_send_drop=%" PRIu32 " in(drop=%llu,under=%llu) "
-                 "out(drop=%llu,under=%llu) tx_seq=%" PRIu32,
-                 s_msbc_decode_fail, s_net_send_drop, (unsigned long long)in_dropped, (unsigned long long)in_under,
-                 (unsigned long long)out_dropped, (unsigned long long)out_under, s_tx_seq);
+        ESP_LOGI(TAG, "STATS msbc_fail=%" PRIu32 " net_send_drop=%" PRIu32
+                 " rxq_drop=%" PRIu32 " ctrl_drop=%" PRIu32 " rx_alloc_fail=%" PRIu32
+                 " in(drop=%llu,under=%llu,high=%u) out(drop=%llu,under=%llu,high=%u) tx_seq=%" PRIu32,
+                 s_msbc_decode_fail, s_net_send_drop, s_rxq_drop, s_ctrl_rxq_drop, s_rx_alloc_fail,
+                 (unsigned long long)in_dropped, (unsigned long long)in_under,
+                 (unsigned)s_in_ring.high_water,
+                 (unsigned long long)out_dropped, (unsigned long long)out_under,
+                 (unsigned)s_out_ring.high_water, s_tx_seq);
     }
 }
 
 static void net_tx_task(void *arg)
 {
-    cb_frame f;
+    cb_frame batch[AUDIO_BATCH_MAX_FRAMES];
     uint32_t idle_ticks = 0;
+
     while (1) {
-        if (s_pending_call_start) {
-            s_pending_call_start = false;
-            send_simple("{\"type\":\"call.start\",\"mode\":\"%s\",\"consent\":true}",
-                        CONFIG_CB_CALL_MODE);
+        EventBits_t bits = xEventGroupGetBits(s_events);
+        bool ws_ready = (bits & EV_WS_OPEN) != 0;
+
+        if (s_pending_call_start && !s_call_start_inflight && ws_ready) {
+            if (send_simple("{\"type\":\"call.start\",\"mode\":\"%s\",\"consent\":true}",
+                            CONFIG_CB_CALL_MODE)) {
+                s_pending_call_start = false;
+                s_call_start_inflight = true;
+            }
         }
-        if (s_pending_call_end) {
-            s_pending_call_end = false;
-            send_simple("{\"type\":\"call.end\",\"call_id\":\"%s\"}", s_pending_call_end_id);
+        if (s_pending_call_end && ws_ready) {
+            if (send_simple("{\"type\":\"call.end\",\"call_id\":\"%s\"}",
+                            s_pending_call_end_id)) {
+                s_pending_call_end = false;
+            }
         }
 
-        bool got = false;
-        lock_take(s_in_lock);
-        got = cb_ring_pop(&s_in_ring, &f);
-        lock_give(s_in_lock);
+        size_t count = 0;
+        if (s_call_active && !s_turn_pending) {
+            TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(AUDIO_BATCH_WAIT_MS);
+            while (count < AUDIO_BATCH_MAX_FRAMES) {
+                bool got;
+                lock_take(s_in_lock);
+                got = cb_ring_pop(&s_in_ring, &batch[count]);
+                lock_give(s_in_lock);
+                if (got) {
+                    count++;
+                    if (count == AUDIO_BATCH_MAX_FRAMES) break;
+                    continue;
+                }
+                if (count == 0 || xTaskGetTickCount() < deadline) {
+                    vTaskDelay(pdMS_TO_TICKS(5));
+                    continue;
+                }
+                break;
+            }
+        } else {
+            /* Drain stale capture while no server call/turn is accepting it. */
+            cb_frame stale;
+            lock_take(s_in_lock);
+            bool got = cb_ring_pop(&s_in_ring, &stale);
+            lock_give(s_in_lock);
+            (void)got;
+        }
 
-        if (got && s_call_active && !s_turn_pending) {
-            /* Allocate sequence only when the frame is actually submitted to
-             * WebSocket. Capture-ring overflow can then drop old audio without
-             * creating a sequence hole that causes every later frame to be
-             * rejected by AudioBuffer.add(). */
-            if (send_audio_frame(f.data, s_tx_seq)) {
-                s_tx_seq++;
-            } else {
-                s_net_send_drop++;
+        if (count > 0) {
+            if (send_audio_batch(batch, count, s_tx_seq)) {
+                s_tx_seq += (uint32_t)count;
             }
             idle_ticks = 0;
-        } else if (got) {
-            /* turn in flight or no call: drop and reconcile */
-        } else {
-            vTaskDelay(pdMS_TO_TICKS(10));
-            if (++idle_ticks >= 3000) { /* ~30 s */
+        }
+
+        /* audio.commit is a control barrier: it is emitted only after every
+         * PCM frame queued before the marker has been submitted. */
+        if (s_commit_requested && s_call_active && !s_turn_pending) {
+            size_t remaining;
+            lock_take(s_in_lock);
+            remaining = s_in_ring.count;
+            lock_give(s_in_lock);
+            if (remaining == 0 && count == 0 && ws_ready) {
+                if (send_simple("{\"type\":\"audio.commit\",\"call_id\":\"%s\",\"request_id\":\"%s\"}",
+                                s_call_id, s_pending_commit_id)) {
+                    s_turn_pending = true;
+                    s_commit_requested = false;
+                    ESP_LOGI(TAG, "COMMIT_SENT %s", s_pending_commit_id);
+                }
+            }
+        }
+
+        if (count == 0) {
+            vTaskDelay(pdMS_TO_TICKS(5));
+            if (++idle_ticks >= 6000) { /* ~30 s */
                 idle_ticks = 0;
-                send_simple("{\"type\":\"ping\"}");
+                if (ws_ready) (void)send_simple("{\"type\":\"ping\"}");
             }
         }
     }
@@ -474,10 +568,20 @@ static void ws_event_handler(void *handler_args, esp_event_base_t base,
             s_accum_len += e->data_len;
         }
         if (e->payload_offset + e->data_len >= e->payload_len && s_accum_len > 0) {
-            rx_msg m = { .data = malloc(s_accum_len), .len = s_accum_len };
+            rx_msg m = { .data = malloc(s_accum_len + 1), .len = s_accum_len };
             if (m.data) {
                 memcpy(m.data, s_accum, s_accum_len);
-                if (xQueueSend(s_rxq, &m, 0) != pdTRUE) free(m.data);
+                m.data[s_accum_len] = '\0';
+                /* Audio playback may be dropped under pressure; state/control
+                 * messages must not sit behind a burst of audio.output. */
+                bool is_audio = strstr((const char *)m.data, "\"audio.output\"") != NULL;
+                QueueHandle_t target = is_audio ? s_rxq : s_ctrl_rxq;
+                if (xQueueSend(target, &m, 0) != pdTRUE) {
+                    if (is_audio) s_rxq_drop++; else s_ctrl_rxq_drop++;
+                    free(m.data);
+                }
+            } else {
+                s_rx_alloc_fail++;
             }
             s_accum_len = 0;
         }
@@ -487,6 +591,14 @@ static void ws_event_handler(void *handler_args, esp_event_base_t base,
         xEventGroupClearBits(s_events, EV_WS_OPEN);
         s_call_active = false;
         s_call_id[0] = '\0';
+        s_turn_pending = false;
+        s_commit_requested = false;
+        s_pending_commit_id[0] = '\0';
+        /* The server finalizes the old call when its socket disappears.
+         * A stale call.end from that connection is no longer useful. */
+        s_pending_call_end = false;
+        s_call_start_inflight = false;
+        if (s_audio_up) s_pending_call_start = true;
         break;
     case WEBSOCKET_EVENT_ERROR:
         ESP_LOGE(TAG,
@@ -506,7 +618,10 @@ static void rx_pump_task(void *arg)
 {
     while (1) {
         rx_msg m;
-        if (xQueueReceive(s_rxq, &m, portMAX_DELAY) == pdTRUE) {
+        /* Drain control first. Audio may wait a few milliseconds; call state
+         * must not be lost behind a playback burst. */
+        if (xQueueReceive(s_ctrl_rxq, &m, 0) == pdTRUE ||
+            xQueueReceive(s_rxq, &m, pdMS_TO_TICKS(10)) == pdTRUE) {
             handle_message((const char *)m.data, m.len);
             free(m.data);
         }
@@ -601,7 +716,7 @@ static void bridge_on_audio_up(esp_hf_sync_conn_hdl_t hdl)
 
     lock_take(s_in_lock);   cb_ring_init(&s_in_ring);  lock_give(s_in_lock);
     lock_take(s_out_lock);  cb_ring_init(&s_out_ring); lock_give(s_out_lock);
-    s_asm_len = 0; s_tx_seq = 0; s_out_epoch = 0;
+    s_asm_len = 0; s_tx_seq = 0; s_out_epoch = 0; s_capture_epoch = 0;
     s_turn_pending = false; s_speech_frames = s_silence_frames = s_collected = 0;
 
     if (local_hfp_test_enabled()) {
@@ -775,6 +890,7 @@ void app_main(void)
 {
     s_events = xEventGroupCreate();
     s_rxq = xQueueCreate(RXQ_LEN, sizeof(rx_msg));
+    s_ctrl_rxq = xQueueCreate(CTRL_RXQ_LEN, sizeof(rx_msg));
     s_msbc_q = xQueueCreate(MSBC_Q_LEN, sizeof(esp_hf_audio_buff_t *));
     s_local_echo_q = xQueueCreate(LOCAL_ECHO_Q_LEN, sizeof(esp_hf_audio_buff_t *));
     s_in_lock = xSemaphoreCreateMutex();
@@ -837,14 +953,11 @@ void app_main(void)
                                            pdMS_TO_TICKS(30000));
     if (!(bits & EV_WIFI_OK)) { ESP_LOGE(TAG, "no Wi-Fi"); return; }
 
-    /* esp_coex_preference_set(ESP_COEX_PREFER_WIFI) was tried here and made
-     * things measurably worse on real hardware: the WS gateway connection
-     * dropped within ~0.5-0.6 s of call start in 3/3 trials, versus 11-33 s
-     * on the default "balance" policy. Reverted. Left as a documented dead
-     * end — do not re-try ESP_COEX_PREFER_WIFI without new evidence it
-     * would help. The default (balance) still leaves the Wi-Fi relay
-     * starved during active HFP/SCO audio (only ~160-440 ms of audio per
-     * call reaches the server); that root cause is still open. */
+    /* Keep the default coexistence policy. Earlier experiments that blamed
+     * RF/coexistence for the broken echo were superseded by hardware logs:
+     * the fatal 15 ms WS write timeout and non-contiguous wire sequence were
+     * the actual call-breaking bugs. Coexistence still affects throughput,
+     * but it is not the primary correctness failure. */
 
     const esp_websocket_client_config_t ws_cfg = {
         .uri = CONFIG_CB_SERVER_URI,
