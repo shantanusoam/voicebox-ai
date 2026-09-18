@@ -3,6 +3,7 @@ import asyncio
 import base64
 import contextlib
 import json
+import logging
 import hashlib
 import re
 import time
@@ -13,6 +14,7 @@ from .errors import AppError
 
 AUTH_RECHECK_SECONDS = 5
 TOUCH_FLUSH_SECONDS = 1
+LOG = logging.getLogger(__name__)
 
 
 class Gateway:
@@ -173,6 +175,7 @@ class Gateway:
             with contextlib.suppress(Exception):
                 await fail(error); await ws.close(1008)
         except Exception:
+            LOG.exception("Unexpected device gateway failure", extra={"device_id": did, "call_id": cid})
             with contextlib.suppress(Exception): await ws.close(1011, 'Gateway failure')
         finally:
             await cancel_generation()
