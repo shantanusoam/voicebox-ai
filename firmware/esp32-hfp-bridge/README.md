@@ -42,7 +42,7 @@ idf.py set-target esp32
 # then set locally, NOT in any committed file (see secrets note):
 #   sdkconfig: CONFIG_CB_WIFI_SSID / CONFIG_CB_WIFI_PASS
 #   sdkconfig: CONFIG_CB_SERVER_URI / CONFIG_CB_DEVICE_ID / CONFIG_CB_DEVICE_TOKEN
-#   sdkconfig: CONFIG_CB_CALL_MODE ("local_echo", "echo" or "agent")
+#   sdkconfig: CONFIG_CB_CALL_MODE ("local_echo", "local_tone", "echo" or "agent")
 idf.py build
 ```
 
@@ -92,7 +92,7 @@ is shown once.
 ## Voice/echo troubleshooting order
 
 If the phone pairs but you cannot hear the echo, do not start with the AI path.
-Use the three modes in this order:
+Use the diagnostic modes in this order:
 
 1. **\`local_echo\`** — no Wi-Fi, WebSocket, JSON, PCM conversion or SBC re-encode. The firmware buffers encoded mSBC packets and returns them to the phone using the same external-codec pattern as Espressif's HFP HF example. Speak from the *remote side of the phone call* and listen for that speech to come back. Logs report SCO RX/TX packet statistics.
 2. **\`echo\`** — enables the complete HFP -> PCM -> WebSocket -> server -> PCM -> mSBC path. If local echo works but this fails, focus on Wi-Fi/Bluetooth coexistence and network scheduling, not pairing or the phone's HFP negotiation.
