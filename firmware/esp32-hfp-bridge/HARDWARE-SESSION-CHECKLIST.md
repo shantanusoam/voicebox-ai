@@ -10,7 +10,79 @@ Raw evidence backing the call-duration/outcome tables below:
 and `session-2026-09-18-server-log-excerpt.txt` (WS accept/open/close and
 keepalive-timeout lines from the server log), both in this directory.
 
-## READ THIS FIRST — the SCO bisect result supersedes earlier theories
+## READ THIS FIRST — SOLVED. Echo works. Two bugs, neither of them radio.
+
+Everything below this section is the investigation trail, kept because the
+negative results are worth knowing. But the RF / coexistence / location
+theories in it are **wrong**, and the sections that present them as likely
+causes should be read as history, not guidance.
+
+| | Session start | After the fixes |
+|---|---|---|
+| Call outcome | `Gateway disconnected` at 0.3 s | **`Completed`, 30-54 s** |
+| Audio frames accepted per call | 0-22 | **584-605** |
+
+Evidence: `session-2026-09-18-echo-working.txt`.
+
+### Bug 1 — a bounded WS write timeout tears down the connection
+
+`esp_websocket_client` treats a write timeout as **fatal**. When
+`transport_poll_write()` times out it returns 0, which the client logs as
+`Error transport_poll_write(0)` and then destroys the connection — even
+though nothing actually failed (`transport_error=ESP_OK`, `errno=0`); the
+socket simply was not writable yet.
+
+Earlier in this same session a bounded 15 ms timeout was added to
+`send_text()` (replacing `portMAX_DELAY`) on the theory that a blocking send
+could wedge `net_tx_task`. That change **caused** the 0.3-2 s call deaths
+that the rest of this document spends hours chasing: under BT coexistence a
+write routinely exceeds 15 ms, and each time it did, the connection died
+~90 ms into the call. Reverted to `portMAX_DELAY`.
+
+**Do not put a short timeout on `esp_websocket_client_send_text()`.** Any
+expiring timeout is a connection-killer, not a dropped frame. The client's
+own `network_timeout_ms` still bounds a genuinely dead link.
+
+### Bug 2 — sequence numbers were assigned at production, not transmission
+
+This is the real, pre-existing reason echo never worked, and it is not
+environmental — it would fail identically on a perfect network.
+
+The server requires a **gapless** sequence starting at 0, and never advances
+past a rejected frame (`callbox/audio.py`, `AudioBuffer.add`):
+
+```python
+if seq != self.seq + 1: raise AppError(409, 'sequence', ...)   # self.seq starts at -1
+```
+
+The firmware assigned `s_tx_seq` when a frame was *produced*. But:
+
+- `bridge_on_audio_up()` starts the codec filling the ring immediately, while
+  `call.started` does not arrive until ~130 ms later (measured). Frames
+  produced in that window are popped and **discarded** by `net_tx_task`
+  because `s_call_active` is still false — yet they consumed sequence
+  numbers. The first frame actually sent therefore carried seq ≈ 6, not 0.
+- `cb_ring_push()`'s return value is ignored, so a ring overflow drops the
+  frame while `s_tx_seq` increments anyway.
+
+Either way the server sees a gap, rejects the frame, leaves `self.seq`
+unchanged, and **rejects every subsequent frame for the rest of the call**.
+`device.frames` never moved. That also explains the old "17 frames then
+nothing" calls: those happened to start at seq 0, then hit a ring overflow.
+
+Fix: number frames where they are actually sent (`s_wire_seq`, incremented
+only on a successful send, reset when `call.started` is received), so the
+wire sequence is contiguous by construction.
+
+### Still open — ~39% delivery
+
+Audio now flows but at ~19-32 frames/s against a 50/s target. Expected cause:
+`net_tx_task` blocks on a slow send, the 8-frame (160 ms) input ring fills,
+and `cb_ring_push` failures are still silently ignored. This is now only lost
+audio, not a broken stream. Candidate fixes: a deeper input ring, and/or a
+cheaper wire format (raw binary instead of JSON+base64, ~30-35% fewer bytes).
+
+## The SCO bisect result (still valid — Bluetooth is healthy)
 
 A `local_tone` bisect run at the end of the session settled most of what the
 earlier sections were still guessing at. **The Bluetooth layer is healthy in

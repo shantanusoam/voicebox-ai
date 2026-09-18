@@ -112,9 +112,16 @@ static QueueHandle_t s_rxq;
 static uint8_t s_accum[8192];
 static size_t s_accum_len;
 
-/* Returns false on timeout/failure without blocking the caller indefinitely.
- * A stalled Wi-Fi link (e.g. BT/Wi-Fi radio coexistence contention while a
- * call is active) must not be allowed to wedge a task forever. */
+/* DO NOT pass a short timeout here. esp_websocket_client treats a write
+ * timeout as FATAL: transport_poll_write() returning 0 is logged as
+ * "Error transport_poll_write(0)" and tears the whole connection down, even
+ * though transport_error=ESP_OK and errno=0 — nothing actually failed, the
+ * socket just was not writable yet. A previous attempt to bound this at 15 ms
+ * killed the connection ~90 ms into every call (the first audio frame that
+ * met a busy socket), turning 11-33 s calls into 0.3-2 s ones. Under BT/Wi-Fi
+ * coexistence a write can easily exceed any small deadline, so any expiring
+ * timeout is a connection-killer. Block instead; the client's own
+ * network_timeout_ms still bounds a genuinely dead link. */
 static bool send_text_timeout(const char *str, TickType_t timeout)
 {
     if (!s_ws) return false; /* local_tone never starts the WS client */
@@ -123,27 +130,38 @@ static bool send_text_timeout(const char *str, TickType_t timeout)
 
 static void send_text(const char *str)
 {
-    send_text_timeout(str, pdMS_TO_TICKS(2000));
+    send_text_timeout(str, portMAX_DELAY);
 }
 
 static uint32_t s_net_send_drop; /* audio frames dropped because the WS send would have blocked */
 
-static void send_audio_frame(const uint8_t *pcm, uint32_t seq)
+/* The server requires a GAPLESS sequence starting at 0 (AudioBuffer.add:
+ * `if seq != self.seq + 1: raise AppError(409,'sequence')`), and it never
+ * advances past a rejected frame — so a single gap rejects every frame for
+ * the rest of the call. s_tx_seq is assigned when a frame is produced, which
+ * is wrong on two counts: frames produced before call.started arrives are
+ * discarded by net_tx_task, and cb_ring_push's failure is ignored on overflow,
+ * both of which burn sequence numbers that never reach the wire. Number the
+ * frames where they are actually sent instead, so the wire sequence is
+ * contiguous by construction. */
+static uint32_t s_wire_seq;
+
+static bool send_audio_frame(const uint8_t *pcm, uint32_t seq)
 {
     static unsigned char b64[((CB_FRAME_BYTES + 2) / 3) * 4 + 1]; /* single net-tx writer */
     static char msg[4096];
     size_t b64_len = 0;
-    if (mbedtls_base64_encode(b64, sizeof(b64), &b64_len, pcm, CB_FRAME_BYTES) != 0) return;
+    if (mbedtls_base64_encode(b64, sizeof(b64), &b64_len, pcm, CB_FRAME_BYTES) != 0) return false;
 
     int n = snprintf(msg, sizeof(msg),
         "{\"type\":\"audio\",\"call_id\":\"%s\",\"seq\":%" PRIu32
         ",\"epoch\":0,\"sample_rate\":16000,\"channels\":1,\"pcm16\":\"%s\"}",
         s_call_id, seq, b64);
-    /* Bounded below one 20 ms frame period: a slow send must not back up the
-     * ring behind it, or one stall silently drops the rest of the call. */
-    if (n > 0 && n < (int)sizeof(msg) && !send_text_timeout(msg, pdMS_TO_TICKS(15))) {
-        s_net_send_drop++;
-    }
+    /* Blocking on purpose — see send_text_timeout(). A bounded timeout here
+     * does not drop one frame, it destroys the connection. */
+    if (n <= 0 || n >= (int)sizeof(msg)) return false;
+    if (!send_text_timeout(msg, portMAX_DELAY)) { s_net_send_drop++; return false; }
+    return true;
 }
 
 static void send_simple(const char *fmt, ...)
@@ -169,6 +187,10 @@ static void handle_message(const char *msg, size_t len)
         const char *cid = cJSON_GetStringValue(cJSON_GetObjectItem(root, "call_id"));
         snprintf(s_call_id, sizeof(s_call_id), "%s", cid ? cid : "");
         s_tx_seq = 0;
+        /* The server's AudioBuffer for this call starts expecting seq 0 right
+         * here, so the wire counter must start here too — not when BT audio
+         * came up, which is ~130 ms earlier. */
+        s_wire_seq = 0;
         s_call_active = true;
         s_turn_pending = false;
         ESP_LOGI(TAG, "CALL_STARTED id=%s", s_call_id);
@@ -345,7 +367,7 @@ static void net_tx_task(void *arg)
         lock_give(s_in_lock);
 
         if (got && s_call_active && !s_turn_pending) {
-            send_audio_frame(f.data, f.sequence);
+            if (send_audio_frame(f.data, s_wire_seq)) s_wire_seq++;
             idle_ticks = 0;
         } else if (got) {
             /* turn in flight or no call: drop and reconcile */
@@ -682,9 +704,9 @@ void app_main(void)
          * SCO path runs, so nothing else can be blamed for what the remote
          * caller does or does not hear. codec_in_task still runs to drain and
          * free the inbound SCO buffers (and give us RX-side counters). */
-        xTaskCreate(codec_in_task, "codecin", 8192, NULL, 6, NULL);
-        xTaskCreate(codec_out_task, "codecout", 6144, NULL, 7, NULL);
-        xTaskCreate(stats_task, "stats", 3072, NULL, 3, NULL);
+        xTaskCreatePinnedToCore(codec_in_task,  "codecin",  8192, NULL, 6, NULL, 1);
+        xTaskCreatePinnedToCore(codec_out_task, "codecout", 6144, NULL, 7, NULL, 1);
+        xTaskCreatePinnedToCore(stats_task,     "stats",    3072, NULL, 3, NULL, 0);
         bt_init();
         ESP_LOGW(TAG, "LOCAL_TONE MODE — 800 Hz test tone, Wi-Fi/server disabled."
                       " Pair your phone with ESP_HFP_HF");
@@ -705,20 +727,33 @@ void app_main(void)
      * starved during active HFP/SCO audio (only ~160-440 ms of audio per
      * call reaches the server); that root cause is still open. */
 
+    /* The WS task answers the server's keepalive pings. At the component
+     * default (5) it sits BELOW codecin(6)/codecout(7), so once a call starts
+     * and the codecs run 133x/s each, it is starved, misses pings, and the
+     * server closes the socket with "keepalive ping timeout" — observed
+     * 0.3-2 s into every call. Put it above the codecs; its work is short and
+     * bursty, so it does not meaningfully delay them. */
     const esp_websocket_client_config_t ws_cfg = {
         .uri = CONFIG_CB_SERVER_URI,
         .buffer_size = 4096,
         .network_timeout_ms = 10000,
+        .task_prio = 8,
     };
     s_ws = esp_websocket_client_init(&ws_cfg);
     esp_websocket_register_events(s_ws, WEBSOCKET_EVENT_ANY, ws_event_handler, NULL);
     esp_websocket_client_start(s_ws);
 
-    xTaskCreate(rx_pump_task, "rxpump", 6144, NULL, 5, NULL);
-    xTaskCreate(codec_in_task, "codecin", 8192, NULL, 6, NULL);
-    xTaskCreate(net_tx_task, "nettx", 8192, NULL, 5, NULL);
-    xTaskCreate(codec_out_task, "codecout", 6144, NULL, 7, NULL);
-    xTaskCreate(stats_task, "stats", 3072, NULL, 3, NULL);
+    /* The BT controller, Bluedroid host and the Wi-Fi task are all pinned to
+     * core 0 by sdkconfig. These tasks were created with no affinity, so the
+     * SBC codecs (the only real CPU hogs here — plain C, no SIMD on Xtensa,
+     * 133 frames/s each) were free to land on core 0 and compete with those
+     * stacks while core 1 sat idle. Pin the codecs to core 1 and keep the
+     * network-facing tasks on core 0 with the stacks they talk to. */
+    xTaskCreatePinnedToCore(codec_in_task,  "codecin",  8192, NULL, 6, NULL, 1);
+    xTaskCreatePinnedToCore(codec_out_task, "codecout", 6144, NULL, 7, NULL, 1);
+    xTaskCreatePinnedToCore(rx_pump_task,   "rxpump",   6144, NULL, 5, NULL, 0);
+    xTaskCreatePinnedToCore(net_tx_task,    "nettx",    8192, NULL, 5, NULL, 0);
+    xTaskCreatePinnedToCore(stats_task,     "stats",    3072, NULL, 3, NULL, 0);
 
     bt_init();
     ESP_LOGI(TAG, "bridge ready — pair your phone with ESP_HFP_HF");

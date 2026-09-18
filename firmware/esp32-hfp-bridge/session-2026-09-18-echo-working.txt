@@ -1,0 +1,28 @@
+# Echo mode working — 2026-09-18, after the two fixes
+# Before: calls died at 0.3s with 0 audio frames accepted.
+# After:  clean multi-second Completed calls with hundreds of frames.
+
+## Serial evidence of root cause #1 (the fatal WS write timeout)
+## captured BEFORE the fix — note transport_error=ESP_OK, errno=0:
+I (513722) callbox: CALL_STARTED id=call_0aece6669e9a494882
+E (513812) transport_ws: Error transport_poll_write(0)
+E (513822) websocket_client: esp_transport_write() returned 0, transport_error=ESP_OK, tls_error_code=0, tls_flags=0, errno=0
+E (513822) callbox: WS_ERROR
+I (513832) websocket_client: Reconnect after 10000 ms
+W (513832) callbox: WS_DISCONNECTED
+
+## Call records after both fixes (GET /api/calls)
+2026-09-18T11:04:19Z  dur=30.284s  Completed
+2026-09-18T11:03:44Z  dur=31.261s  Completed
+2026-09-18T11:00:05Z  dur=54.323s  Completed
+2026-09-18T10:53:04Z  dur=31.212s  Gateway disconnected
+2026-09-18T10:50:08Z  dur=0.243s  Gateway disconnected
+2026-09-18T10:49:37Z  dur=0.164s  Gateway disconnected
+
+## Frame delivery (device.frames, GET /api/devices)
+211  -> baseline immediately before the sequence fix was flashed
+816  -> after one 31.3s call  (+605 frames)
+1400 -> after one 30.3s call  (+584 frames)
+Previously this counter did not move at all during a call.
+Delivery is ~39% of the 50 frames/s target; residual loss is ring
+overflow while net_tx_task blocks on a slow send (see checklist).
