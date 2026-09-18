@@ -21,12 +21,14 @@ menu "CallBox Device Configuration"
         default "REPLACE_ME"
 
     config CB_CALL_MODE
-        string "Call mode: local_echo, echo or agent"
+        string "Call mode: local_echo, local_tone, echo or agent"
         default "echo"
         help
-            local_echo bypasses Wi-Fi/WebSocket and loops received mSBC
-            packets directly back to the phone. Use it to prove the HFP/SCO
-            path independently before debugging the network bridge.
+            local_echo bypasses Wi-Fi/WebSocket and loops received mSBC packets
+            directly back to the phone. local_tone sends a generated mSBC
+            test tone back to the phone using the incoming SCO packet cadence.
+            Use these to prove HFP/SCO transmit independently before debugging
+            the network bridge.
 
     config CB_VAD_THRESHOLD
         int "Speech gate RMS threshold (0-32767)"
