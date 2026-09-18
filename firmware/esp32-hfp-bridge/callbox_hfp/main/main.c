@@ -60,6 +60,21 @@ static SemaphoreHandle_t s_in_lock, s_out_lock;
 #define MSBC_Q_LEN 24
 static QueueHandle_t s_msbc_q;
 
+/* Diagnostic mode that follows Espressif's external-codec HFP example:
+ * buffer encoded SCO packets and send them straight back to the phone.
+ * It deliberately uses no Wi-Fi, WebSocket, JSON, PCM conversion or SBC
+ * re-encoding, so it isolates the Bluetooth/HFP path from the network path. */
+#define LOCAL_ECHO_Q_LEN 32
+#define LOCAL_ECHO_PREFILL 20
+static QueueHandle_t s_local_echo_q;
+static TaskHandle_t s_local_echo_task_handle;
+static uint32_t s_local_echo_sent, s_local_echo_drop, s_local_echo_bad;
+
+static bool local_echo_enabled(void)
+{
+    return strcmp(CONFIG_CB_CALL_MODE, "local_echo") == 0;
+}
+
 static sbc_t s_sbc_dec, s_sbc_enc;
 static bool s_sbc_ready;
 static uint32_t s_msbc_decode_fail; /* mSBC decode/frame-size failures, cumulative */
@@ -204,6 +219,46 @@ static void handle_message(const char *msg, size_t len)
 }
 
 /* ---------- tasks ---------- */
+static void local_echo_task(void *arg)
+{
+    while (1) {
+        /* One notification arrives for each successfully queued HFP packet.
+         * Keep roughly 150 ms (20 x 7.5 ms) buffered, matching Espressif's
+         * HFP HF external-codec example, then return one encoded packet per
+         * new packet received.  Successful audio_data_send takes ownership. */
+        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+        if (!local_echo_enabled()) continue;
+
+        if (!s_audio_up) {
+            esp_hf_audio_buff_t *stale = NULL;
+            while (xQueueReceive(s_local_echo_q, &stale, 0) == pdTRUE) {
+                esp_hf_client_audio_buff_free(stale);
+            }
+            continue;
+        }
+
+        if (uxQueueMessagesWaiting(s_local_echo_q) < LOCAL_ECHO_PREFILL) continue;
+
+        esp_hf_audio_buff_t *echo = NULL;
+        if (xQueueReceive(s_local_echo_q, &echo, 0) != pdTRUE || !echo) continue;
+
+        /* mSBC payload is 57 bytes. Incoming HCI packets may contain padding,
+         * but esp_hf_client_audio_data_send rejects padding on transmit. */
+        if (echo->data_len > ESP_HF_MSBC_ENCODED_FRAME_SIZE) {
+            echo->data_len = ESP_HF_MSBC_ENCODED_FRAME_SIZE;
+        }
+
+        esp_err_t err = esp_hf_client_audio_data_send(s_sync_conn_hdl(), echo);
+        if (err != ESP_OK) {
+            s_local_echo_drop++;
+            esp_hf_client_audio_buff_free(echo);
+        } else {
+            s_local_echo_sent++;
+        }
+    }
+}
+
 static void codec_in_task(void *arg)
 {
     esp_hf_audio_buff_t *buf;
@@ -279,7 +334,16 @@ static void stats_task(void *arg)
 {
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(5000));
-        if (!s_call_active) continue;
+        if (!s_call_active && !(local_echo_enabled() && s_audio_up)) continue;
+
+        if (local_echo_enabled()) {
+            (void)esp_hf_client_pkt_stat_nums_get(s_sync_conn_hdl());
+            ESP_LOGI(TAG, "LOCAL_ECHO queued=%u sent=%" PRIu32 " drop=%" PRIu32 " bad=%" PRIu32,
+                     (unsigned)uxQueueMessagesWaiting(s_local_echo_q),
+                     s_local_echo_sent, s_local_echo_drop, s_local_echo_bad);
+            continue;
+        }
+
         uint64_t in_dropped, in_under, out_dropped, out_under;
         lock_take(s_in_lock);
         in_dropped = s_in_ring.dropped; in_under = s_in_ring.underflows;
@@ -456,6 +520,21 @@ esp_hf_sync_conn_hdl_t s_sync_conn_hdl(void) { return s_hfp_hdl; }
 
 static void hfp_audio_data_cb(esp_hf_sync_conn_hdl_t hdl, esp_hf_audio_buff_t *buf, bool bad)
 {
+    if (local_echo_enabled()) {
+        if (bad) {
+            s_local_echo_bad++;
+            esp_hf_client_audio_buff_free(buf);
+            return;
+        }
+        if (xQueueSend(s_local_echo_q, &buf, 0) != pdTRUE) {
+            s_local_echo_drop++;
+            esp_hf_client_audio_buff_free(buf);
+            return;
+        }
+        if (s_local_echo_task_handle) xTaskNotifyGive(s_local_echo_task_handle);
+        return;
+    }
+
     if (bad || xQueueSend(s_msbc_q, &buf, 0) != pdTRUE) {
         esp_hf_client_audio_buff_free(buf);
     }
@@ -472,10 +551,23 @@ static void bridge_on_audio_up(esp_hf_sync_conn_hdl_t hdl)
 {
     s_hfp_hdl = hdl;
     s_audio_up = true;
+
+    /* Match Espressif's HFP HF example: while SCO is active, disable both
+     * page scan and inquiry scan to free over-the-air bandwidth for audio. */
+    (void)esp_bt_gap_set_scan_mode(ESP_BT_NON_CONNECTABLE, ESP_BT_NON_DISCOVERABLE);
+
     lock_take(s_in_lock);   cb_ring_init(&s_in_ring);  lock_give(s_in_lock);
     lock_take(s_out_lock);  cb_ring_init(&s_out_ring); lock_give(s_out_lock);
     s_asm_len = 0; s_tx_seq = 0; s_out_epoch = 0;
     s_turn_pending = false; s_speech_frames = s_silence_frames = s_collected = 0;
+
+    if (local_echo_enabled()) {
+        s_local_echo_sent = s_local_echo_drop = s_local_echo_bad = 0;
+        if (s_local_echo_task_handle) xTaskNotifyGive(s_local_echo_task_handle);
+        ESP_LOGI(TAG, "BT AUDIO UP (mSBC) — LOCAL HFP ECHO, Wi-Fi bypassed");
+        return;
+    }
+
     s_pending_call_start = true;
     esp_timer_start_periodic(s_out_timer, 7500);
     ESP_LOGI(TAG, "BT AUDIO UP (mSBC) — call.start queued");
@@ -483,8 +575,18 @@ static void bridge_on_audio_up(esp_hf_sync_conn_hdl_t hdl)
 
 static void bridge_on_audio_down(void)
 {
-    esp_timer_stop(s_out_timer);
+    if (!local_echo_enabled()) {
+        (void)esp_timer_stop(s_out_timer);
+    }
     s_audio_up = false;
+    (void)esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
+
+    if (local_echo_enabled()) {
+        if (s_local_echo_task_handle) xTaskNotifyGive(s_local_echo_task_handle);
+        ESP_LOGW(TAG, "BT AUDIO DOWN — local echo stopped");
+        return;
+    }
+
     if (s_call_active && s_call_id[0]) {
         snprintf(s_pending_call_end_id, sizeof(s_pending_call_end_id), "%s", s_call_id);
         s_pending_call_end = true;
@@ -497,9 +599,13 @@ static void hfp_cb(esp_hf_client_cb_event_t event, esp_hf_client_cb_param_t *par
     switch (event) {
     case ESP_HF_CLIENT_CONNECTION_STATE_EVT:
         ESP_LOGI(TAG, "HF connection state %d", param->conn_stat.state);
+        if (param->conn_stat.state == ESP_HF_CLIENT_CONNECTION_STATE_DISCONNECTED) {
+            (void)esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
+        }
         break;
     case ESP_HF_CLIENT_AUDIO_STATE_EVT:
-        ESP_LOGI(TAG, "HF audio state %d", param->audio_stat.state);
+        ESP_LOGI(TAG, "HF audio state %d preferred_frame_size=%u",
+                 param->audio_stat.state, (unsigned)param->audio_stat.preferred_frame_size);
         if (param->audio_stat.state == ESP_HF_CLIENT_AUDIO_STATE_CONNECTED_MSBC) {
             bridge_on_audio_up(param->audio_stat.sync_conn_handle);
         } else if (param->audio_stat.state == ESP_HF_CLIENT_AUDIO_STATE_CONNECTED) {
@@ -510,6 +616,16 @@ static void hfp_cb(esp_hf_client_cb_event_t event, esp_hf_client_cb_param_t *par
         break;
     case ESP_HF_CLIENT_CIND_CALL_SETUP_EVT:
         ESP_LOGI(TAG, "call setup %d", param->call_setup.status);
+        break;
+    case ESP_HF_CLIENT_PKT_STAT_NUMS_GET_EVT:
+        ESP_LOGI(TAG,
+                 "SCO PKTS rx(total=%" PRIu32 ",ok=%" PRIu32 ",err=%" PRIu32
+                 ",none=%" PRIu32 ",lost=%" PRIu32 ") tx(total=%" PRIu32
+                 ",discard=%" PRIu32 ")",
+                 param->pkt_nums.rx_total, param->pkt_nums.rx_correct,
+                 param->pkt_nums.rx_err, param->pkt_nums.rx_none,
+                 param->pkt_nums.rx_lost, param->pkt_nums.tx_total,
+                 param->pkt_nums.tx_discarded);
         break;
     default:
         break;
@@ -586,6 +702,10 @@ static void wifi_init(void)
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wc));
     ESP_ERROR_CHECK(esp_wifi_start());
+
+    /* HFP/SCO is latency-sensitive. Modem sleep can add avoidable scheduling
+     * gaps while BT and Wi-Fi are already time-sharing the same 2.4 GHz radio. */
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
 }
 
 /* ---------- main ---------- */
@@ -594,6 +714,7 @@ void app_main(void)
     s_events = xEventGroupCreate();
     s_rxq = xQueueCreate(RXQ_LEN, sizeof(rx_msg));
     s_msbc_q = xQueueCreate(MSBC_Q_LEN, sizeof(esp_hf_audio_buff_t *));
+    s_local_echo_q = xQueueCreate(LOCAL_ECHO_Q_LEN, sizeof(esp_hf_audio_buff_t *));
     s_in_lock = xSemaphoreCreateMutex();
     s_out_lock = xSemaphoreCreateMutex();
     s_out_tick = xSemaphoreCreateBinary();
@@ -604,6 +725,23 @@ void app_main(void)
         .callback = out_timer_cb, .name = "out_tick",
     };
     ESP_ERROR_CHECK(esp_timer_create(&timer_args, &s_out_timer));
+
+    if (strcmp(CONFIG_CB_CALL_MODE, "local_echo") != 0 &&
+        strcmp(CONFIG_CB_CALL_MODE, "echo") != 0 &&
+        strcmp(CONFIG_CB_CALL_MODE, "agent") != 0) {
+        ESP_LOGE(TAG, "invalid CONFIG_CB_CALL_MODE=%s (use local_echo, echo or agent)",
+                 CONFIG_CB_CALL_MODE);
+        return;
+    }
+
+    if (local_echo_enabled()) {
+        xTaskCreate(local_echo_task, "hfpecho", 4096, NULL, 8, &s_local_echo_task_handle);
+        xTaskCreate(stats_task, "stats", 3072, NULL, 3, NULL);
+        bt_init();
+        ESP_LOGI(TAG, "LOCAL HFP ECHO ready — Wi-Fi/WebSocket intentionally disabled");
+        ESP_LOGI(TAG, "Pair ESP_HFP_HF, place a call, and speak from the remote phone.");
+        return;
+    }
 
     if (sbc_init_msbc(&s_sbc_dec, 0L) != 0 || sbc_init_msbc(&s_sbc_enc, 0L) != 0) {
         ESP_LOGE(TAG, "sbc init failed");
