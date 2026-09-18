@@ -15,6 +15,7 @@ int main(void) {
     assert(ring.underflows == 1);
     assert(!cb_ring_push(&ring, pcm, 8, 0, 0));
     for (unsigned i=0;i<CB_RING_CAPACITY;i++) assert(cb_ring_push(&ring, pcm, sizeof(pcm), i, 0));
+    assert(ring.high_water == CB_RING_CAPACITY);
     assert(!cb_ring_push(&ring, pcm, sizeof(pcm), 9, 0));
     assert(ring.dropped == 1);
     for (unsigned i=0;i<CB_RING_CAPACITY;i++) {
