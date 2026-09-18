@@ -118,11 +118,12 @@ static int16_t frame_rms_dbish(const uint8_t *pcm)
 
 /* ---------- WS receive pump state ---------- */
 #define RXQ_LEN 24
+#define CTRL_RXQ_LEN 12
 typedef struct { uint8_t *data; size_t len; } rx_msg;
-static QueueHandle_t s_rxq;
+static QueueHandle_t s_rxq, s_ctrl_rxq;
 static uint8_t s_accum[8192];
 static size_t s_accum_len;
-static uint32_t s_rxq_drop, s_rx_alloc_fail;
+static uint32_t s_rxq_drop, s_ctrl_rxq_drop, s_rx_alloc_fail;
 
 /* Binary PCM batch protocol shared with callbox.audio:
  * >4sBBHII : magic, frame_count, flags, frame_bytes, first_seq, epoch.
@@ -382,9 +383,9 @@ static void stats_task(void *arg)
         out_dropped = s_out_ring.dropped; out_under = s_out_ring.underflows;
         lock_give(s_out_lock);
         ESP_LOGI(TAG, "STATS msbc_fail=%" PRIu32 " net_send_drop=%" PRIu32
-                 " rxq_drop=%" PRIu32 " rx_alloc_fail=%" PRIu32
+                 " rxq_drop=%" PRIu32 " ctrl_drop=%" PRIu32 " rx_alloc_fail=%" PRIu32
                  " in(drop=%llu,under=%llu,high=%u) out(drop=%llu,under=%llu,high=%u) tx_seq=%" PRIu32,
-                 s_msbc_decode_fail, s_net_send_drop, s_rxq_drop, s_rx_alloc_fail,
+                 s_msbc_decode_fail, s_net_send_drop, s_rxq_drop, s_ctrl_rxq_drop, s_rx_alloc_fail,
                  (unsigned long long)in_dropped, (unsigned long long)in_under,
                  (unsigned)s_in_ring.high_water,
                  (unsigned long long)out_dropped, (unsigned long long)out_under,
@@ -564,11 +565,16 @@ static void ws_event_handler(void *handler_args, esp_event_base_t base,
             s_accum_len += e->data_len;
         }
         if (e->payload_offset + e->data_len >= e->payload_len && s_accum_len > 0) {
-            rx_msg m = { .data = malloc(s_accum_len), .len = s_accum_len };
+            rx_msg m = { .data = malloc(s_accum_len + 1), .len = s_accum_len };
             if (m.data) {
                 memcpy(m.data, s_accum, s_accum_len);
-                if (xQueueSend(s_rxq, &m, 0) != pdTRUE) {
-                    s_rxq_drop++;
+                m.data[s_accum_len] = '\0';
+                /* Audio playback may be dropped under pressure; state/control
+                 * messages must not sit behind a burst of audio.output. */
+                bool is_audio = strstr((const char *)m.data, "\"type\":\"audio.output\"") != NULL;
+                QueueHandle_t target = is_audio ? s_rxq : s_ctrl_rxq;
+                if (xQueueSend(target, &m, 0) != pdTRUE) {
+                    if (is_audio) s_rxq_drop++; else s_ctrl_rxq_drop++;
                     free(m.data);
                 }
             } else {
@@ -608,7 +614,10 @@ static void rx_pump_task(void *arg)
 {
     while (1) {
         rx_msg m;
-        if (xQueueReceive(s_rxq, &m, portMAX_DELAY) == pdTRUE) {
+        /* Drain control first. Audio may wait a few milliseconds; call state
+         * must not be lost behind a playback burst. */
+        if (xQueueReceive(s_ctrl_rxq, &m, 0) == pdTRUE ||
+            xQueueReceive(s_rxq, &m, pdMS_TO_TICKS(10)) == pdTRUE) {
             handle_message((const char *)m.data, m.len);
             free(m.data);
         }
@@ -877,6 +886,7 @@ void app_main(void)
 {
     s_events = xEventGroupCreate();
     s_rxq = xQueueCreate(RXQ_LEN, sizeof(rx_msg));
+    s_ctrl_rxq = xQueueCreate(CTRL_RXQ_LEN, sizeof(rx_msg));
     s_msbc_q = xQueueCreate(MSBC_Q_LEN, sizeof(esp_hf_audio_buff_t *));
     s_local_echo_q = xQueueCreate(LOCAL_ECHO_Q_LEN, sizeof(esp_hf_audio_buff_t *));
     s_in_lock = xSemaphoreCreateMutex();
