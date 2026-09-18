@@ -131,13 +131,21 @@ def test_gateway_accepts_text_tools_in_echo_lab(client):
         result=ws.receive_json()
         assert result['type']=='turn.result' and '10:00' in result['reply']
 
-def test_only_one_connection_per_device(client):
+def test_reconnect_takes_over_a_stale_connection(client):
+    """A device that reboots must be able to reclaim its own slot.
+
+    The server cannot tell a dead socket from a live one quickly, so rejecting
+    the new hello locked the real device out until the stale entry timed out.
+    Hardware hit this on every reset: the board reconnected, was refused with
+    device_busy, and sat unauthenticated through an entire call.
+    """
     d=provision(client)
     with client.websocket_connect('/ws/device') as a:
         hello(a,d)
         with client.websocket_connect('/ws/device') as b:
-            assert hello(b,d)['code']=='device_busy'
-        a.send_json({'type':'ping'});assert a.receive_json()['type']=='pong'
+            # The newcomer wins and is fully usable.
+            assert hello(b,d)['type']=='ready'
+            b.send_json({'type':'ping'});assert b.receive_json()['type']=='pong'
 
 def test_gateway_revoked_credentials_fail(client):
     d=provision(client);client.post('/api/devices/'+d['id']+'/revoke',json={'confirm':True})

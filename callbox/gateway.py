@@ -105,8 +105,20 @@ class Gateway:
             device = self.db.authenticate_device(hello.get('token'), hello.get('device_id'))
             if not device: raise AppError(401, 'device_auth', 'Invalid or revoked device credentials.')
             did, workspace = device['id'], device['workspace']
-            if did in self.connections:
-                raise AppError(409, 'device_busy', 'This device already has an active connection.')
+            # Same-token takeover. A device that reboots (or loses Wi-Fi) leaves
+            # a socket here that the server has not yet noticed is dead, and the
+            # device's own reconnect then gets rejected as device_busy until that
+            # stale entry times out — observed on hardware as a device stuck
+            # unauthenticated across a whole call. Credentials are per-device, so
+            # a successful hello for a device that already has an entry means the
+            # same physical device came back: close the old socket and let the new
+            # one win rather than locking the real device out.
+            stale = self.connections.pop(did, None)
+            if stale is not None:
+                self.db.event(workspace, 'device.reconnected',
+                              'Replaced a stale gateway connection')
+                with contextlib.suppress(Exception):
+                    await stale.close(1012, 'Replaced by a newer connection')
             self.connections[did] = ws; own_connection = True
             self.db.touch_device(did)
             self.db.event(workspace, 'device.connected', 'Lab gateway connected')
@@ -220,7 +232,11 @@ class Gateway:
             if cid:
                 self.db.end_call(workspace, cid, 'Gateway disconnected')
                 self.agent.locks.pop(cid, None)
-            if did and own_connection:
+            # Only tear down device state if this socket is still the registered
+            # one. A newer connection may have taken over (see the takeover above),
+            # and this handler unwinding afterwards must not evict the live socket
+            # or mark a connected device offline.
+            if did and own_connection and self.connections.get(did) is ws:
                 self.connections.pop(did, None)
                 # Flush the batched frame count before going offline.
                 self.db.touch_device(did, online=False, frames=pending_frames)

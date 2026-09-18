@@ -97,6 +97,7 @@ static uint32_t s_msbc_decode_fail; /* mSBC decode/frame-size failures, cumulati
 static uint8_t s_asm[CB_FRAME_BYTES + 256]; /* 320 samples + one partial frame slack */
 static size_t s_asm_len;
 static int s_speech_frames, s_silence_frames, s_collected;
+static int16_t s_rms_max; /* loudest frame this stats interval, for VAD calibration */
 
 /* 7.5 ms output clock */
 static SemaphoreHandle_t s_out_tick;
@@ -313,6 +314,11 @@ static void codec_in_task(void *arg)
                 bool request_commit = false;
                 if (collect) {
                     int16_t r = frame_rms_dbish(frame);
+                    /* Report the loudest frame seen per stats interval. Without
+                     * this the VAD is uncalibratable: if nothing ever crosses
+                     * the threshold there is no "speech detected" line, so the
+                     * log looks identical for "too quiet" and "not listening". */
+                    if (r > s_rms_max) s_rms_max = r;
                     if (r > CONFIG_CB_VAD_THRESHOLD) {
                         s_speech_frames++; s_silence_frames = 0;
                         if (s_speech_frames >= 2 && s_collected == 0) {
@@ -325,7 +331,13 @@ static void codec_in_task(void *arg)
                     if (s_collected >= 5 &&
                         (s_silence_frames >= 40 || s_collected >= 750)) {
                         snprintf(s_pending_commit_id, sizeof(s_pending_commit_id),
-                                 "turn-%" PRIu32, ++s_turn_counter);
+                                 /* The server requires [A-Za-z0-9_-]{8,100}
+                                  * (gateway.py). Plain "turn-1" is 6 chars and
+                                  * was rejected with code=request_id, so every
+                                  * first commit of every call failed and agent
+                                  * mode could never complete a turn. Zero-pad
+                                  * to clear the 8-char floor from turn 1. */
+                                 "turn-%08" PRIu32, ++s_turn_counter);
                         request_commit = true;
                     }
                 }
@@ -386,12 +398,15 @@ static void stats_task(void *arg)
         lock_give(s_out_lock);
         ESP_LOGI(TAG, "STATS msbc_fail=%" PRIu32 " net_send_drop=%" PRIu32
                  " rxq_drop=%" PRIu32 " ctrl_drop=%" PRIu32 " rx_alloc_fail=%" PRIu32
-                 " in(drop=%llu,under=%llu,high=%u) out(drop=%llu,under=%llu,high=%u) tx_seq=%" PRIu32,
+                 " in(drop=%llu,under=%llu,high=%u) out(drop=%llu,under=%llu,high=%u) tx_seq=%" PRIu32
+                 " rms_max=%d/thr=%d",
                  s_msbc_decode_fail, s_net_send_drop, s_rxq_drop, s_ctrl_rxq_drop, s_rx_alloc_fail,
                  (unsigned long long)in_dropped, (unsigned long long)in_under,
                  (unsigned)s_in_ring.high_water,
                  (unsigned long long)out_dropped, (unsigned long long)out_under,
-                 (unsigned)s_out_ring.high_water, s_tx_seq);
+                 (unsigned)s_out_ring.high_water, s_tx_seq,
+                 (int)s_rms_max, (int)CONFIG_CB_VAD_THRESHOLD);
+        s_rms_max = 0;
     }
 }
 
@@ -431,7 +446,14 @@ static void net_tx_task(void *arg)
                     if (count == AUDIO_BATCH_MAX_FRAMES) break;
                     continue;
                 }
-                if (count == 0 || xTaskGetTickCount() < deadline) {
+                /* Exit on the deadline even with nothing collected. Waiting for
+                 * "at least one frame" deadlocks the moment a commit is pending:
+                 * s_commit_requested stops should_queue, the ring drains to
+                 * empty, count sticks at 0, and this loop spins forever — so the
+                 * audio.commit barrier below is never reached, the device goes
+                 * silent, and the server's 45 s receive timeout kills the call
+                 * before any turn can run. */
+                if (xTaskGetTickCount() < deadline) {
                     vTaskDelay(pdMS_TO_TICKS(5));
                     continue;
                 }
