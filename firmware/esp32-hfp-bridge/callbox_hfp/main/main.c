@@ -551,6 +551,11 @@ static void bridge_on_audio_up(esp_hf_sync_conn_hdl_t hdl)
 {
     s_hfp_hdl = hdl;
     s_audio_up = true;
+
+    /* Match Espressif's HFP HF example: while SCO is active, disable both
+     * page scan and inquiry scan to free over-the-air bandwidth for audio. */
+    (void)esp_bt_gap_set_scan_mode(ESP_BT_NON_CONNECTABLE, ESP_BT_NON_DISCOVERABLE);
+
     lock_take(s_in_lock);   cb_ring_init(&s_in_ring);  lock_give(s_in_lock);
     lock_take(s_out_lock);  cb_ring_init(&s_out_ring); lock_give(s_out_lock);
     s_asm_len = 0; s_tx_seq = 0; s_out_epoch = 0;
@@ -574,6 +579,7 @@ static void bridge_on_audio_down(void)
         (void)esp_timer_stop(s_out_timer);
     }
     s_audio_up = false;
+    (void)esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
 
     if (local_echo_enabled()) {
         if (s_local_echo_task_handle) xTaskNotifyGive(s_local_echo_task_handle);
@@ -593,11 +599,7 @@ static void hfp_cb(esp_hf_client_cb_event_t event, esp_hf_client_cb_param_t *par
     switch (event) {
     case ESP_HF_CLIENT_CONNECTION_STATE_EVT:
         ESP_LOGI(TAG, "HF connection state %d", param->conn_stat.state);
-        if (param->conn_stat.state == ESP_HF_CLIENT_CONNECTION_STATE_SLC_CONNECTED) {
-            /* Stop inquiry visibility while audio is active/reconnectable.
-             * Keep page scan enabled so the paired phone can reconnect. */
-            (void)esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_NON_DISCOVERABLE);
-        } else if (param->conn_stat.state == ESP_HF_CLIENT_CONNECTION_STATE_DISCONNECTED) {
+        if (param->conn_stat.state == ESP_HF_CLIENT_CONNECTION_STATE_DISCONNECTED) {
             (void)esp_bt_gap_set_scan_mode(ESP_BT_CONNECTABLE, ESP_BT_GENERAL_DISCOVERABLE);
         }
         break;
