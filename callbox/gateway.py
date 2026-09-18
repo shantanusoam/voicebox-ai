@@ -145,7 +145,10 @@ class Gateway:
                         await send({'type':'call.started','call_id':cid,'mode':mode,'epoch':buffer.epoch,'greeting':call['messages'][0]['text']})
                         continue
                     if not cid: raise AppError(409, 'no_call', 'Start a call first.')
-                    if message.get('call_id') != cid: raise AppError(409, 'wrong_call', 'Message is not for the active call.')
+                    # Binary audio batches are connection-scoped and omit the
+                    # redundant call_id to keep the hardware wire header tiny.
+                    if kind != 'audio.batch' and message.get('call_id') != cid:
+                        raise AppError(409, 'wrong_call', 'Message is not for the active call.')
                     if kind == 'audio':
                         pcm = buffer.add(message)
                         pending_frames += 1
