@@ -282,9 +282,8 @@ static void codec_in_task(void *arg)
             continue;
         }
 
-        /* agent mode: drop input while a generated turn is in flight */
-        bool collect = s_call_active && !s_turn_pending &&
-                       strcmp(CONFIG_CB_CALL_MODE, "agent") == 0;
+        bool agent_mode = strcmp(CONFIG_CB_CALL_MODE, "agent") == 0;
+        bool collect = s_call_active && agent_mode && !s_turn_pending && !s_commit_requested;
 
         /* append to assembly and emit 640-byte wire frames */
         size_t off = 0;
@@ -299,6 +298,7 @@ static void codec_in_task(void *arg)
                 memmove(s_asm, s_asm + CB_FRAME_BYTES, s_asm_len - CB_FRAME_BYTES);
                 s_asm_len -= CB_FRAME_BYTES;
 
+                bool request_commit = false;
                 if (collect) {
                     int16_t r = frame_rms_dbish(frame);
                     if (r > CONFIG_CB_VAD_THRESHOLD) {
@@ -310,26 +310,33 @@ static void codec_in_task(void *arg)
                         s_silence_frames++;
                     }
                     if (s_speech_frames >= 2) s_collected++;
-                    if (s_collected >= 5 && s_collected >= 5 &&
+                    if (s_collected >= 5 &&
                         (s_silence_frames >= 40 || s_collected >= 750)) {
-                        s_turn_pending = true;
-                        char rid[40];
-                        snprintf(rid, sizeof(rid), "turn-%" PRIu32, ++s_turn_counter);
-                        send_simple("{\"type\":\"audio.commit\",\"call_id\":\"%s\",\"request_id\":\"%s\"}",
-                                    s_call_id, rid);
-                        ESP_LOGI(TAG, "COMMIT %s after %d frames", rid, s_collected);
-                        s_speech_frames = s_silence_frames = s_collected = 0;
+                        snprintf(s_pending_commit_id, sizeof(s_pending_commit_id),
+                                 "turn-%" PRIu32, ++s_turn_counter);
+                        request_commit = true;
                     }
                 }
 
-                /* Sequence numbers belong to the transport, not capture.
-                 * The bounded ring may legitimately reject frames under
-                 * backpressure. Numbering here used to advance even when
-                 * cb_ring_push() failed, permanently poisoning the server's
-                 * strict sequence checker after the first overflow. */
-                lock_take(s_in_lock);
-                (void)cb_ring_push(&s_in_ring, frame, CB_FRAME_BYTES, 0, 0);
-                lock_give(s_in_lock);
+                /* Do not queue pre-call audio, generated-turn audio, or audio
+                 * after an end-of-turn marker. The frame that triggered the
+                 * commit is queued first; net_tx_task sends the commit only
+                 * after this ring drains, preserving speech-before-commit
+                 * ordering on the wire. */
+                bool should_queue = s_call_active && !s_turn_pending && !s_commit_requested;
+                if (should_queue) {
+                    lock_take(s_in_lock);
+                    (void)cb_ring_push(&s_in_ring, frame, CB_FRAME_BYTES, 0, 0);
+                    lock_give(s_in_lock);
+                }
+
+                if (request_commit) {
+                    s_commit_requested = true;
+                    ESP_LOGI(TAG, "COMMIT_QUEUED %s after %d frames",
+                             s_pending_commit_id, s_collected);
+                    s_speech_frames = s_silence_frames = s_collected = 0;
+                    collect = false;
+                }
             }
         }
     }
@@ -374,42 +381,83 @@ static void stats_task(void *arg)
 
 static void net_tx_task(void *arg)
 {
-    cb_frame f;
+    cb_frame batch[AUDIO_BATCH_MAX_FRAMES];
     uint32_t idle_ticks = 0;
+
     while (1) {
-        if (s_pending_call_start) {
-            s_pending_call_start = false;
-            send_simple("{\"type\":\"call.start\",\"mode\":\"%s\",\"consent\":true}",
-                        CONFIG_CB_CALL_MODE);
+        EventBits_t bits = xEventGroupGetBits(s_events);
+        bool ws_ready = (bits & EV_WS_OPEN) != 0;
+
+        if (s_pending_call_start && ws_ready) {
+            if (send_simple("{\"type\":\"call.start\",\"mode\":\"%s\",\"consent\":true}",
+                            CONFIG_CB_CALL_MODE)) {
+                s_pending_call_start = false;
+            }
         }
-        if (s_pending_call_end) {
-            s_pending_call_end = false;
-            send_simple("{\"type\":\"call.end\",\"call_id\":\"%s\"}", s_pending_call_end_id);
+        if (s_pending_call_end && ws_ready) {
+            if (send_simple("{\"type\":\"call.end\",\"call_id\":\"%s\"}",
+                            s_pending_call_end_id)) {
+                s_pending_call_end = false;
+            }
         }
 
-        bool got = false;
-        lock_take(s_in_lock);
-        got = cb_ring_pop(&s_in_ring, &f);
-        lock_give(s_in_lock);
+        size_t count = 0;
+        if (s_call_active && !s_turn_pending) {
+            TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(AUDIO_BATCH_WAIT_MS);
+            while (count < AUDIO_BATCH_MAX_FRAMES) {
+                bool got;
+                lock_take(s_in_lock);
+                got = cb_ring_pop(&s_in_ring, &batch[count]);
+                lock_give(s_in_lock);
+                if (got) {
+                    count++;
+                    if (count == AUDIO_BATCH_MAX_FRAMES) break;
+                    continue;
+                }
+                if (count == 0 || xTaskGetTickCount() < deadline) {
+                    vTaskDelay(pdMS_TO_TICKS(5));
+                    continue;
+                }
+                break;
+            }
+        } else {
+            /* Drain stale capture while no server call/turn is accepting it. */
+            cb_frame stale;
+            lock_take(s_in_lock);
+            bool got = cb_ring_pop(&s_in_ring, &stale);
+            lock_give(s_in_lock);
+            (void)got;
+        }
 
-        if (got && s_call_active && !s_turn_pending) {
-            /* Allocate sequence only when the frame is actually submitted to
-             * WebSocket. Capture-ring overflow can then drop old audio without
-             * creating a sequence hole that causes every later frame to be
-             * rejected by AudioBuffer.add(). */
-            if (send_audio_frame(f.data, s_tx_seq)) {
-                s_tx_seq++;
-            } else {
-                s_net_send_drop++;
+        if (count > 0) {
+            if (send_audio_batch(batch, count, s_tx_seq)) {
+                s_tx_seq += (uint32_t)count;
             }
             idle_ticks = 0;
-        } else if (got) {
-            /* turn in flight or no call: drop and reconcile */
-        } else {
-            vTaskDelay(pdMS_TO_TICKS(10));
-            if (++idle_ticks >= 3000) { /* ~30 s */
+        }
+
+        /* audio.commit is a control barrier: it is emitted only after every
+         * PCM frame queued before the marker has been submitted. */
+        if (s_commit_requested && s_call_active && !s_turn_pending) {
+            size_t remaining;
+            lock_take(s_in_lock);
+            remaining = s_in_ring.count;
+            lock_give(s_in_lock);
+            if (remaining == 0 && count == 0 && ws_ready) {
+                if (send_simple("{\"type\":\"audio.commit\",\"call_id\":\"%s\",\"request_id\":\"%s\"}",
+                                s_call_id, s_pending_commit_id)) {
+                    s_turn_pending = true;
+                    s_commit_requested = false;
+                    ESP_LOGI(TAG, "COMMIT_SENT %s", s_pending_commit_id);
+                }
+            }
+        }
+
+        if (count == 0) {
+            vTaskDelay(pdMS_TO_TICKS(5));
+            if (++idle_ticks >= 6000) { /* ~30 s */
                 idle_ticks = 0;
-                send_simple("{\"type\":\"ping\"}");
+                if (ws_ready) (void)send_simple("{\"type\":\"ping\"}");
             }
         }
     }
