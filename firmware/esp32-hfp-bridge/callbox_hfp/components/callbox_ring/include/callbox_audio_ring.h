@@ -18,7 +18,7 @@ typedef struct {
 } cb_frame;
 typedef struct {
     cb_frame frames[CB_RING_CAPACITY];
-    size_t read_index, write_index, count;
+    size_t read_index, write_index, count, high_water;
     uint32_t epoch;
     uint64_t dropped, underflows;
 } cb_audio_ring;
