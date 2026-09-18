@@ -121,12 +121,15 @@ static QueueHandle_t s_rxq;
 static uint8_t s_accum[8192];
 static size_t s_accum_len;
 
-/* Returns false on timeout/failure without blocking the caller indefinitely.
- * A stalled Wi-Fi link (e.g. BT/Wi-Fi radio coexistence contention while a
- * call is active) must not be allowed to wedge a task forever. */
+/* Important esp_websocket_client semantic: an expired write timeout is not a
+ * harmless per-frame drop. transport_poll_write() returning 0 is treated as a
+ * fatal transport error and the client tears the WebSocket down. Real hardware
+ * reproduced this ~90 ms after call.start when audio used a 15 ms deadline.
+ * Therefore audio writes below deliberately use portMAX_DELAY; the client's
+ * own network_timeout_ms still bounds a genuinely dead transport. */
 static bool send_text_timeout(const char *str, TickType_t timeout)
 {
-    return esp_websocket_client_send_text(s_ws, str, strlen(str), timeout) >= 0;
+    return s_ws && esp_websocket_client_send_text(s_ws, str, strlen(str), timeout) >= 0;
 }
 
 static void send_text(const char *str)
@@ -134,24 +137,27 @@ static void send_text(const char *str)
     send_text_timeout(str, pdMS_TO_TICKS(2000));
 }
 
-static uint32_t s_net_send_drop; /* audio frames dropped because the WS send would have blocked */
+static uint32_t s_net_send_drop; /* failed audio submissions to the WS client */
 
-static void send_audio_frame(const uint8_t *pcm, uint32_t seq)
+static bool send_audio_frame(const uint8_t *pcm, uint32_t seq)
 {
     static unsigned char b64[((CB_FRAME_BYTES + 2) / 3) * 4 + 1]; /* single net-tx writer */
     static char msg[4096];
     size_t b64_len = 0;
-    if (mbedtls_base64_encode(b64, sizeof(b64), &b64_len, pcm, CB_FRAME_BYTES) != 0) return;
+    if (mbedtls_base64_encode(b64, sizeof(b64), &b64_len, pcm, CB_FRAME_BYTES) != 0) {
+        return false;
+    }
 
     int n = snprintf(msg, sizeof(msg),
         "{\"type\":\"audio\",\"call_id\":\"%s\",\"seq\":%" PRIu32
         ",\"epoch\":0,\"sample_rate\":16000,\"channels\":1,\"pcm16\":\"%s\"}",
         s_call_id, seq, b64);
-    /* Bounded below one 20 ms frame period: a slow send must not back up the
-     * ring behind it, or one stall silently drops the rest of the call. */
-    if (n > 0 && n < (int)sizeof(msg) && !send_text_timeout(msg, pdMS_TO_TICKS(15))) {
-        s_net_send_drop++;
-    }
+    if (n <= 0 || n >= (int)sizeof(msg)) return false;
+
+    /* DO NOT replace this with a short deadline. A 15 ms timeout caused
+     * transport_poll_write(0) and esp_websocket_client disconnected the whole
+     * session. Backpressure is absorbed by the bounded input ring instead. */
+    return send_text_timeout(msg, portMAX_DELAY);
 }
 
 static void send_simple(const char *fmt, ...)
@@ -219,10 +225,6 @@ static void handle_message(const char *msg, size_t len)
         const char *code = cJSON_GetStringValue(cJSON_GetObjectItem(root, "code"));
         const char *emsg = cJSON_GetStringValue(cJSON_GetObjectItem(root, "message"));
         ESP_LOGE(TAG, "SERVER_ERROR code=%s msg=%s", code ? code : "?", emsg ? emsg : "?");
-        if (code && strcmp(code, "frame") == 0) {
-            /* Frame errors must be reconciled, not blindly incremented. */
-            s_tx_seq = 0;
-        }
     } else if (strcmp(type, "pong") == 0) {
         /* heartbeat ack */
     }
@@ -289,10 +291,14 @@ static void codec_in_task(void *arg)
                     }
                 }
 
+                /* Sequence numbers belong to the transport, not capture.
+                 * The bounded ring may legitimately reject frames under
+                 * backpressure. Numbering here used to advance even when
+                 * cb_ring_push() failed, permanently poisoning the server's
+                 * strict sequence checker after the first overflow. */
                 lock_take(s_in_lock);
-                cb_ring_push(&s_in_ring, frame, CB_FRAME_BYTES, s_tx_seq, 0);
+                (void)cb_ring_push(&s_in_ring, frame, CB_FRAME_BYTES, 0, 0);
                 lock_give(s_in_lock);
-                s_tx_seq++;
             }
         }
     }
@@ -316,6 +322,10 @@ static void stats_task(void *arg)
                      s_local_echo_sent, s_local_echo_drop, s_local_echo_bad);
             continue;
         }
+
+        /* Compare SCO health with Wi-Fi/WebSocket active. This was decisive
+         * in local_tone mode and should stay visible in echo/agent mode too. */
+        (void)esp_hf_client_pkt_stat_nums_get(s_sync_conn_hdl());
 
         uint64_t in_dropped, in_under, out_dropped, out_under;
         lock_take(s_in_lock);
@@ -352,7 +362,15 @@ static void net_tx_task(void *arg)
         lock_give(s_in_lock);
 
         if (got && s_call_active && !s_turn_pending) {
-            send_audio_frame(f.data, f.sequence);
+            /* Allocate sequence only when the frame is actually submitted to
+             * WebSocket. Capture-ring overflow can then drop old audio without
+             * creating a sequence hole that causes every later frame to be
+             * rejected by AudioBuffer.add(). */
+            if (send_audio_frame(f.data, s_tx_seq)) {
+                s_tx_seq++;
+            } else {
+                s_net_send_drop++;
+            }
             idle_ticks = 0;
         } else if (got) {
             /* turn in flight or no call: drop and reconcile */
@@ -469,7 +487,13 @@ static void ws_event_handler(void *handler_args, esp_event_base_t base,
         s_call_id[0] = '\0';
         break;
     case WEBSOCKET_EVENT_ERROR:
-        ESP_LOGE(TAG, "WS_ERROR");
+        ESP_LOGE(TAG,
+                 "WS_ERROR type=%d transport=%s tls=0x%x sock_errno=%d handshake=%d",
+                 (int)e->error_handle.error_type,
+                 esp_err_to_name(e->error_handle.esp_tls_last_esp_err),
+                 (unsigned)e->error_handle.esp_tls_stack_err,
+                 e->error_handle.esp_transport_sock_errno,
+                 e->error_handle.esp_ws_handshake_status_code);
         break;
     default:
         break;
