@@ -46,6 +46,9 @@ static char s_call_id[64];
 static volatile bool s_call_active;      /* call.started received */
 static volatile bool s_audio_up;         /* BT mSBC audio connected */
 static volatile bool s_turn_pending;     /* agent: commit sent, awaiting turn.done */
+static volatile bool s_pending_call_start; /* deferred out of the BT callback, see bridge_on_audio_up */
+static volatile bool s_pending_call_end;   /* deferred out of the BT callback, see bridge_on_audio_down */
+static char s_pending_call_end_id[64];     /* call_id snapshot, BT callback cannot touch s_ws itself */
 static uint32_t s_tx_seq, s_out_epoch;
 static uint32_t s_turn_counter;
 
@@ -59,6 +62,7 @@ static QueueHandle_t s_msbc_q;
 
 static sbc_t s_sbc_dec, s_sbc_enc;
 static bool s_sbc_ready;
+static uint32_t s_msbc_decode_fail; /* mSBC decode/frame-size failures, cumulative */
 
 /* assembly of decoded mSBC (120 samples = 240 B per frame) into 640-byte wire frames */
 static uint8_t s_asm[CB_FRAME_BYTES + 256]; /* 320 samples + one partial frame slack */
@@ -91,10 +95,20 @@ static QueueHandle_t s_rxq;
 static uint8_t s_accum[8192];
 static size_t s_accum_len;
 
+/* Returns false on timeout/failure without blocking the caller indefinitely.
+ * A stalled Wi-Fi link (e.g. BT/Wi-Fi radio coexistence contention while a
+ * call is active) must not be allowed to wedge a task forever. */
+static bool send_text_timeout(const char *str, TickType_t timeout)
+{
+    return esp_websocket_client_send_text(s_ws, str, strlen(str), timeout) >= 0;
+}
+
 static void send_text(const char *str)
 {
-    esp_websocket_client_send_text(s_ws, str, strlen(str), portMAX_DELAY);
+    send_text_timeout(str, pdMS_TO_TICKS(2000));
 }
+
+static uint32_t s_net_send_drop; /* audio frames dropped because the WS send would have blocked */
 
 static void send_audio_frame(const uint8_t *pcm, uint32_t seq)
 {
@@ -107,7 +121,11 @@ static void send_audio_frame(const uint8_t *pcm, uint32_t seq)
         "{\"type\":\"audio\",\"call_id\":\"%s\",\"seq\":%" PRIu32
         ",\"epoch\":0,\"sample_rate\":16000,\"channels\":1,\"pcm16\":\"%s\"}",
         s_call_id, seq, b64);
-    if (n > 0 && n < (int)sizeof(msg)) send_text(msg);
+    /* Bounded below one 20 ms frame period: a slow send must not back up the
+     * ring behind it, or one stall silently drops the rest of the call. */
+    if (n > 0 && n < (int)sizeof(msg) && !send_text_timeout(msg, pdMS_TO_TICKS(15))) {
+        s_net_send_drop++;
+    }
 }
 
 static void send_simple(const char *fmt, ...)
@@ -199,7 +217,11 @@ static void codec_in_task(void *arg)
         size_t written = 0;
         ssize_t frames = sbc_decode(&s_sbc_dec, buf->data, in_len, pcm_out, sizeof(pcm_out), &written);
         esp_hf_client_audio_buff_free(buf);
-        if (frames < 0 || written != 240) { ESP_LOGW(TAG, "msbc decode fail %d", (int)frames); continue; }
+        if (frames < 0 || written != 240) {
+            s_msbc_decode_fail++;
+            ESP_LOGW(TAG, "msbc decode fail %d (total %" PRIu32 ")", (int)frames, s_msbc_decode_fail);
+            continue;
+        }
 
         /* agent mode: drop input while a generated turn is in flight */
         bool collect = s_call_active && !s_turn_pending &&
@@ -250,11 +272,43 @@ static void codec_in_task(void *arg)
     }
 }
 
+/* Periodic playout/decode health line, active-call only. Read under each
+ * ring's own lock since dropped/underflows are updated by producer/consumer
+ * tasks that already hold s_in_lock/s_out_lock. */
+static void stats_task(void *arg)
+{
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(5000));
+        if (!s_call_active) continue;
+        uint64_t in_dropped, in_under, out_dropped, out_under;
+        lock_take(s_in_lock);
+        in_dropped = s_in_ring.dropped; in_under = s_in_ring.underflows;
+        lock_give(s_in_lock);
+        lock_take(s_out_lock);
+        out_dropped = s_out_ring.dropped; out_under = s_out_ring.underflows;
+        lock_give(s_out_lock);
+        ESP_LOGI(TAG, "STATS msbc_fail=%" PRIu32 " net_send_drop=%" PRIu32 " in(drop=%llu,under=%llu) "
+                 "out(drop=%llu,under=%llu) tx_seq=%" PRIu32,
+                 s_msbc_decode_fail, s_net_send_drop, (unsigned long long)in_dropped, (unsigned long long)in_under,
+                 (unsigned long long)out_dropped, (unsigned long long)out_under, s_tx_seq);
+    }
+}
+
 static void net_tx_task(void *arg)
 {
     cb_frame f;
     uint32_t idle_ticks = 0;
     while (1) {
+        if (s_pending_call_start) {
+            s_pending_call_start = false;
+            send_simple("{\"type\":\"call.start\",\"mode\":\"%s\",\"consent\":true}",
+                        CONFIG_CB_CALL_MODE);
+        }
+        if (s_pending_call_end) {
+            s_pending_call_end = false;
+            send_simple("{\"type\":\"call.end\",\"call_id\":\"%s\"}", s_pending_call_end_id);
+        }
+
         bool got = false;
         lock_take(s_in_lock);
         got = cb_ring_pop(&s_in_ring, &f);
@@ -407,6 +461,13 @@ static void hfp_audio_data_cb(esp_hf_sync_conn_hdl_t hdl, esp_hf_audio_buff_t *b
     }
 }
 
+/* Runs on the Bluedroid BTC task context, not a task we own. Per
+ * docs/ARCHITECTURE.md: BT callbacks only queue and free; network I/O must
+ * happen in a dedicated task. send_simple() used to be called directly from
+ * here, blocking this BT stack thread on a WS send (up to portMAX_DELAY,
+ * later bounded to 2s) right as a call starts/ends — plausible cause of the
+ * call instability seen on real hardware, independent of Wi-Fi RF quality.
+ * Defer the actual send to net_tx_task instead. */
 static void bridge_on_audio_up(esp_hf_sync_conn_hdl_t hdl)
 {
     s_hfp_hdl = hdl;
@@ -415,10 +476,9 @@ static void bridge_on_audio_up(esp_hf_sync_conn_hdl_t hdl)
     lock_take(s_out_lock);  cb_ring_init(&s_out_ring); lock_give(s_out_lock);
     s_asm_len = 0; s_tx_seq = 0; s_out_epoch = 0;
     s_turn_pending = false; s_speech_frames = s_silence_frames = s_collected = 0;
-    send_simple("{\"type\":\"call.start\",\"mode\":\"%s\",\"consent\":true}",
-                CONFIG_CB_CALL_MODE);
+    s_pending_call_start = true;
     esp_timer_start_periodic(s_out_timer, 7500);
-    ESP_LOGI(TAG, "BT AUDIO UP (mSBC) — call.start sent");
+    ESP_LOGI(TAG, "BT AUDIO UP (mSBC) — call.start queued");
 }
 
 static void bridge_on_audio_down(void)
@@ -426,9 +486,10 @@ static void bridge_on_audio_down(void)
     esp_timer_stop(s_out_timer);
     s_audio_up = false;
     if (s_call_active && s_call_id[0]) {
-        send_simple("{\"type\":\"call.end\",\"call_id\":\"%s\"}", s_call_id);
+        snprintf(s_pending_call_end_id, sizeof(s_pending_call_end_id), "%s", s_call_id);
+        s_pending_call_end = true;
     }
-    ESP_LOGW(TAG, "BT AUDIO DOWN — call.end sent");
+    ESP_LOGW(TAG, "BT AUDIO DOWN — call.end queued");
 }
 
 static void hfp_cb(esp_hf_client_cb_event_t event, esp_hf_client_cb_param_t *param)
@@ -555,6 +616,15 @@ void app_main(void)
                                            pdMS_TO_TICKS(30000));
     if (!(bits & EV_WIFI_OK)) { ESP_LOGE(TAG, "no Wi-Fi"); return; }
 
+    /* esp_coex_preference_set(ESP_COEX_PREFER_WIFI) was tried here and made
+     * things measurably worse on real hardware: the WS gateway connection
+     * dropped within ~0.5-0.6 s of call start in 3/3 trials, versus 11-33 s
+     * on the default "balance" policy. Reverted. Left as a documented dead
+     * end — do not re-try ESP_COEX_PREFER_WIFI without new evidence it
+     * would help. The default (balance) still leaves the Wi-Fi relay
+     * starved during active HFP/SCO audio (only ~160-440 ms of audio per
+     * call reaches the server); that root cause is still open. */
+
     const esp_websocket_client_config_t ws_cfg = {
         .uri = CONFIG_CB_SERVER_URI,
         .buffer_size = 4096,
@@ -568,6 +638,7 @@ void app_main(void)
     xTaskCreate(codec_in_task, "codecin", 8192, NULL, 6, NULL);
     xTaskCreate(net_tx_task, "nettx", 8192, NULL, 5, NULL);
     xTaskCreate(codec_out_task, "codecout", 6144, NULL, 7, NULL);
+    xTaskCreate(stats_task, "stats", 3072, NULL, 3, NULL);
 
     bt_init();
     ESP_LOGI(TAG, "bridge ready — pair your phone with ESP_HFP_HF");

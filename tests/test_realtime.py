@@ -60,7 +60,7 @@ def test_hold_then_confirm_commits_once(session):
 
 def test_model_cannot_invent_a_slot(session):
     """A time the calendar never offered must be refused."""
-    result = session.dispatch('hold_slot', {'starts_at': '2026-09-15T03:00:00+05:30', 'name': 'Ghost'})
+    result = session.dispatch('hold_slot', {'starts_at': f'{_tomorrow()}T03:00:00+05:30', 'name': 'Ghost'})
     assert result['error'] == 'slot_unavailable'
     assert not session.db.appointments('clinic-demo')
 

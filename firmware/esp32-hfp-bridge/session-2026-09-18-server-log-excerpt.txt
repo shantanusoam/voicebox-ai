@@ -1,0 +1,512 @@
+INFO:     192.168.29.99:51833 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51834 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51835 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51836 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51837 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51838 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51839 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51840 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51841 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51842 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51843 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51844 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51845 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51846 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51847 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51848 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51849 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51850 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51851 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51852 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51853 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51854 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51855 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51856 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51857 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51858 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51859 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51860 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51861 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51862 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51863 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51864 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51865 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51866 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51867 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51868 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51869 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51870 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51871 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51872 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51873 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51874 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51875 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51876 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51877 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51878 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51879 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51880 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51881 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51882 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51883 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51884 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51885 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51886 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51887 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51888 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51889 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51890 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51891 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51892 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51893 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51894 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51895 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51896 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51897 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51898 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51899 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51900 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51901 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51902 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51903 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51904 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51905 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51906 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51907 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51908 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51909 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51910 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51911 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51912 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51913 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51914 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51915 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51916 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51917 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51918 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51919 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51920 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51921 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51922 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51923 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51924 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51925 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51926 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51927 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51928 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51929 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51930 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51931 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51932 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51933 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51934 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51935 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51936 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51937 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51938 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51939 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51940 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51941 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51942 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51943 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51944 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51945 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51946 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51947 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51948 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51949 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51950 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51951 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51952 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51953 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51954 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51955 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51956 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51957 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51958 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51959 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51960 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51961 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51962 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51963 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51964 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51965 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51966 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51967 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51968 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51969 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51970 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51971 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51972 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51973 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51974 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51975 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51976 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51977 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51978 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51979 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51980 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51981 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51982 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51983 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51984 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51985 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51986 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51987 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51988 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51989 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51990 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51991 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51992 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51993 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51994 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51995 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51996 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51997 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51998 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:51999 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52000 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52001 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52002 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52003 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52004 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52005 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52006 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52007 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52008 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52009 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52010 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52011 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52012 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52013 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52014 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52015 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52016 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52017 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52018 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52019 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52020 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52021 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52022 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52023 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52024 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52025 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52026 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52027 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52028 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52029 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52030 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52031 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52032 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52033 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52034 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52035 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52036 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52037 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52038 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52039 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52040 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52041 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52042 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52043 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52044 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52045 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52046 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52047 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52048 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52049 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52050 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52051 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52052 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52053 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52054 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52055 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52056 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52057 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52058 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52059 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52060 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52061 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52062 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52063 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52064 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52065 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52066 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52067 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52068 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52069 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52070 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52071 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52072 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52073 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52074 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52075 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52076 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     192.168.29.99:52077 - "WebSocket /ws/device" 403
+INFO:     connection closed
+INFO:     10.130.235.235:55483 - "WebSocket /ws/device" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     10.130.235.235:55484 - "WebSocket /ws/device" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     10.130.235.235:55485 - "WebSocket /ws/device" [accepted]
+INFO:     connection open
+future: <Future finished exception=ConnectionClosedError(None, Close(code=<CloseCode.INTERNAL_ERROR: 1011>, reason='keepalive ping timeout'), None)>
+websockets.exceptions.ConnectionClosedError: sent 1011 (internal error) keepalive ping timeout; no close frame received
+INFO:     connection closed
+INFO:     10.130.235.235:50641 - "WebSocket /ws/device" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     10.130.235.235:50642 - "WebSocket /ws/device" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     10.130.235.235:50643 - "WebSocket /ws/device" [accepted]
+INFO:     connection open
+INFO:     connection closed
+INFO:     10.130.235.235:50644 - "WebSocket /ws/device" [accepted]
+INFO:     connection open
