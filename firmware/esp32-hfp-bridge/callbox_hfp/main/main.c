@@ -949,14 +949,11 @@ void app_main(void)
                                            pdMS_TO_TICKS(30000));
     if (!(bits & EV_WIFI_OK)) { ESP_LOGE(TAG, "no Wi-Fi"); return; }
 
-    /* esp_coex_preference_set(ESP_COEX_PREFER_WIFI) was tried here and made
-     * things measurably worse on real hardware: the WS gateway connection
-     * dropped within ~0.5-0.6 s of call start in 3/3 trials, versus 11-33 s
-     * on the default "balance" policy. Reverted. Left as a documented dead
-     * end — do not re-try ESP_COEX_PREFER_WIFI without new evidence it
-     * would help. The default (balance) still leaves the Wi-Fi relay
-     * starved during active HFP/SCO audio (only ~160-440 ms of audio per
-     * call reaches the server); that root cause is still open. */
+    /* Keep the default coexistence policy. Earlier experiments that blamed
+     * RF/coexistence for the broken echo were superseded by hardware logs:
+     * the fatal 15 ms WS write timeout and non-contiguous wire sequence were
+     * the actual call-breaking bugs. Coexistence still affects throughput,
+     * but it is not the primary correctness failure. */
 
     const esp_websocket_client_config_t ws_cfg = {
         .uri = CONFIG_CB_SERVER_URI,
