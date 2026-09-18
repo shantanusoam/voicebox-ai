@@ -89,10 +89,15 @@ class Gateway:
                                 'sample_rate':SAMPLE_RATE,'pcm16':base64.b64encode(frame).decode()})
                     await asyncio.sleep(.02)
                 await send({'type':'turn.done','call_id':call_id,'epoch':epoch})
-            except AppError as error: await fail(error)
-            except asyncio.CancelledError: raise
+            except AppError as error:
+                await fail(error)
+                await send({'type':'turn.done','call_id':call_id,'epoch':epoch})
+            except asyncio.CancelledError:
+                raise
             except Exception:
+                LOG.exception("Voice turn failed", extra={"call_id": call_id})
                 await fail(AppError(500,'gateway_turn_error','Voice turn failed. Check stored call state before retrying.'))
+                await send({'type':'turn.done','call_id':call_id,'epoch':epoch})
         try:
             hello = await self.receive(ws, 5)
             if hello.get('type') != 'hello' or hello.get('protocol') != 'callbox.v1':
