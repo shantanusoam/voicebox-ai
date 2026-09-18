@@ -17,6 +17,7 @@ MAX_TURN_BYTES = SAMPLE_RATE * 2 * 15
 AUDIO_BATCH_MAGIC = b'CBA1'
 AUDIO_BATCH_HEADER = struct.Struct('>4sBBHII')
 MAX_AUDIO_BATCH_FRAMES = 8
+MAX_FORWARD_SEQUENCE_GAP = 10
 
 # Below this RMS (of a 32768 full-scale signal) a turn is treated as having no
 # speech in it. Measured reference points: digital silence 0, a quiet room
@@ -163,16 +164,30 @@ async def resample_async(wav_bytes: bytes) -> bytes:
 
 class AudioBuffer:
     def __init__(self):
-        self.data = bytearray(); self.seq = -1; self.epoch = 0
+        self.data = bytearray(); self.seq = -1; self.epoch = 0; self.lost_frames = 0
     def add_pcm(self, pcm: bytes, seq: int, epoch: int = 0):
         if epoch != self.epoch: raise AppError(409, 'stale_audio', 'Audio belongs to a cancelled playback epoch.')
         if not isinstance(pcm, (bytes, bytearray)) or len(pcm) != FRAME_BYTES:
             raise AppError(422, 'frame_size', 'Every frame must contain exactly 640 bytes (20 ms).')
         if isinstance(seq, bool) or not isinstance(seq, int) or not 0 <= seq <= 2**31 - 1:
             raise AppError(422, 'sequence', 'Frame sequence must be a nonnegative integer.')
-        if seq != self.seq + 1: raise AppError(409, 'sequence', 'Out-of-order or missing audio frame.')
-        if len(self.data) + len(pcm) > MAX_TURN_BYTES:
+        expected = self.seq + 1
+        if seq < expected:
+            raise AppError(409, 'sequence', 'Duplicate or out-of-order audio frame.')
+        gap = seq - expected
+        # The very first frame still establishes a strict seq=0 contract. Once
+        # a stream is established, bounded forward loss degrades to silence
+        # instead of poisoning every later real-time frame.
+        if self.seq < 0 and gap:
+            raise AppError(409, 'sequence', 'First audio frame must use sequence 0.')
+        if gap > MAX_FORWARD_SEQUENCE_GAP:
+            raise AppError(409, 'sequence', 'Audio sequence gap exceeds the recovery window.')
+        extra = gap * FRAME_BYTES
+        if len(self.data) + extra + len(pcm) > MAX_TURN_BYTES:
             raise AppError(413, 'audio_buffer_full', 'Commit or interrupt before the 15-second turn limit.')
+        if gap:
+            self.data.extend(b'\0' * extra)
+            self.lost_frames += gap
         self.seq = seq; self.data.extend(pcm)
         return bytes(pcm)
     def add(self, message):
