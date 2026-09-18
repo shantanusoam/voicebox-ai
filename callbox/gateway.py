@@ -8,7 +8,7 @@ import hashlib
 import re
 import time
 from fastapi import WebSocket, WebSocketDisconnect
-from .audio import AudioBuffer, FRAME_BYTES, SAMPLE_RATE, to_wav, resample_async
+from .audio import AudioBuffer, FRAME_BYTES, SAMPLE_RATE, to_wav, resample_async, unpack_audio_batch
 from .errors import AppError
 
 
@@ -23,7 +23,20 @@ class Gateway:
         self.connections = {}
 
     async def receive(self, ws, timeout=45):
-        raw = await asyncio.wait_for(ws.receive_text(), timeout)
+        event = await asyncio.wait_for(ws.receive(), timeout)
+        if event.get('type') == 'websocket.disconnect':
+            raise WebSocketDisconnect(event.get('code', 1000))
+        raw = event.get('text')
+        binary = event.get('bytes')
+        if binary is not None:
+            # Binary is reserved for versioned batched PCM uplink. Keeping
+            # control messages as JSON makes the protocol debuggable while
+            # removing base64 + one-write-per-frame overhead from audio.
+            if len(binary) > 6000:
+                raise AppError(413, 'message_size', 'Gateway binary message exceeds 6000 bytes.')
+            return unpack_audio_batch(binary)
+        if raw is None:
+            raise AppError(422, 'invalid_message', 'Expected a text or binary WebSocket message.')
         if len(raw) > 5000: raise AppError(413, 'message_size', 'Gateway message exceeds 5000 characters.')
         try: data = json.loads(raw)
         except (ValueError, TypeError): raise AppError(422, 'invalid_json', 'Expected a JSON object.')
@@ -140,6 +153,23 @@ class Gateway:
                             buffer.take()
                             await send({'type':'audio.output','call_id':cid,'epoch':buffer.epoch,
                                         'seq':message['seq'],'sample_rate':SAMPLE_RATE,'pcm16':base64.b64encode(pcm).decode()})
+                    elif kind == 'audio.batch':
+                        frames = message['frames']
+                        first_seq = message['first_seq']
+                        epoch = message['epoch']
+                        echoed = []
+                        for index, pcm in enumerate(frames):
+                            seq = first_seq + index
+                            echoed.append((seq, buffer.add_pcm(pcm, seq, epoch)))
+                            pending_frames += 1
+                        if mode == 'echo':
+                            # Echo each logical 20 ms frame so the existing
+                            # device downlink remains protocol-compatible.
+                            buffer.take()
+                            for seq, pcm in echoed:
+                                await send({'type':'audio.output','call_id':cid,'epoch':buffer.epoch,
+                                            'seq':seq,'sample_rate':SAMPLE_RATE,
+                                            'pcm16':base64.b64encode(pcm).decode()})
                     elif kind == 'audio.commit':
                         if mode != 'agent': raise AppError(409, 'mode', 'Echo mode does not send audio to a model.')
                         if generation_task and not generation_task.done(): raise AppError(409,'busy','Interrupt or wait for the current turn.')
