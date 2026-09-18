@@ -134,7 +134,9 @@ static bool send_text_timeout(const char *str, TickType_t timeout)
 
 static void send_text(const char *str)
 {
-    send_text_timeout(str, pdMS_TO_TICKS(2000));
+    /* Control writes use the same rule as audio: a short application timeout
+     * is connection-fatal in esp_websocket_client, not a harmless retry. */
+    (void)send_text_timeout(str, portMAX_DELAY);
 }
 
 static uint32_t s_net_send_drop; /* failed audio submissions to the WS client */
