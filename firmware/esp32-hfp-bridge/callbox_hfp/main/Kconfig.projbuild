@@ -21,8 +21,15 @@ menu "CallBox Device Configuration"
         default "REPLACE_ME"
 
     config CB_CALL_MODE
-        string "Call mode: echo or agent"
+        string "Call mode: echo, agent, or local_tone"
         default "echo"
+        help
+            echo/agent both stream call audio to the CallBox server over
+            Wi-Fi. local_tone is a hardware bisect mode: it generates an
+            800 Hz tone on-device and sends it up the SCO link, with Wi-Fi,
+            the WebSocket and the server left out entirely. If the remote
+            caller hears the tone, the ESP32 -> phone SCO transmit path
+            works and the fault is further up the chain.
 
     config CB_VAD_THRESHOLD
         int "Speech gate RMS threshold (0-32767)"

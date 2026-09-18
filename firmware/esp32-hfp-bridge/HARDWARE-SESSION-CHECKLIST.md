@@ -10,6 +10,81 @@ Raw evidence backing the call-duration/outcome tables below:
 and `session-2026-09-18-server-log-excerpt.txt` (WS accept/open/close and
 keepalive-timeout lines from the server log), both in this directory.
 
+## READ THIS FIRST — the SCO bisect result supersedes earlier theories
+
+A `local_tone` bisect run at the end of the session settled most of what the
+earlier sections were still guessing at. **The Bluetooth layer is healthy in
+both directions; the fault is isolated to the Wi-Fi/WebSocket relay.** Do not
+spend more time on SCO, mSBC, frame sizing or Samsung audio routing — all
+four are measured-good. Details in "local_tone SCO bisect" below; raw
+evidence in `session-2026-09-18-local-tone-sco-stats.txt`.
+
+## local_tone SCO bisect — the decisive test
+
+Added a `local_tone` call mode (`CONFIG_CB_CALL_MODE="local_tone"`): the
+device synthesizes an 800 Hz tone and pushes it up the SCO link, and Wi-Fi,
+the WS client and the server are never started. Because
+`CONFIG_CB_CALL_MODE` is a compile-time literal, the compiler constant-folds
+the mode check and the linker drops the whole Wi-Fi/WebSocket path — verified
+with `nm`: `esp_wifi_start`, `esp_websocket_client_init`, `net_tx_task` and
+`rx_pump_task` are **absent from the binary** (image shrinks 1.33 MB -> 702 KB).
+So this is a true hardware bisect, not a runtime skip.
+
+Also added, and useful in every mode (they are only gated on `s_audio_up`):
+SCO controller packet counters via `esp_hf_client_pkt_stat_nums_get()` /
+`ESP_HF_CLIENT_PKT_STAT_NUMS_GET_EVT`, and `preferred_frame_size` from
+`ESP_HF_CLIENT_AUDIO_STATE_EVT`.
+
+**Result — operator confirmed the remote caller heard a continuous tone for
+the entire call.** Counters over a ~48 s call:
+
+```
+queued=5777  sent=5777  drop=0  bad=0
+tx(total=5777, discard=0)
+rx(total=5775, ok=5719, err=0, none=56, lost=0)
+HF audio state 3 sync_conn_handle=384 preferred_frame_size=57 (we send 57)
+```
+
+- **TX: 5777/5777, zero drops, zero encode failures, zero controller
+  discards.** Pacing exact: 5777 frames / 43.3 s = 133.3 per second, i.e.
+  precisely the 7.5 ms tick.
+- **RX: zero errors, zero lost.** 56 `none` out of 5775 = 0.97%.
+- `preferred_frame_size` matches what we send (57), so we are on Bluedroid's
+  zero-extra-copy path — that hypothesis is also closed.
+
+**Ruled out by this test**: SCO transmit, SCO receive, mSBC encode/decode,
+frame sizing, the 7.5 ms output timer, and Samsung's HFP audio routing.
+
+**The contrast is the whole story:**
+
+| Path | Delivery rate |
+|---|---|
+| Bluetooth SCO (tone mode, no Wi-Fi in the binary) | 100% TX / 99.0% RX |
+| Wi-Fi WebSocket relay (echo mode) | ~1.3% |
+
+This refines rather than refutes the coexistence theory, but flips its
+direction: **Bluetooth is not the victim of the arbitration, it is the
+winner.** SCO gets all the airtime it needs and performs perfectly; Wi-Fi is
+the side starved into collapse. That is also consistent with every earlier
+observation (WS dies 0.3-2 s into a call; BT audio keeps working fine for
+the full call even after the WS is gone; the user's "echo but very low
+volume" report from home).
+
+### Next experiment (not yet run)
+
+The SCO counters log in `echo` mode too. Flash `echo`, make one call, and
+compare:
+
+- RX stays ~99% clean while the WS still dies => **pure Wi-Fi starvation**,
+  Bluetooth unaffected. Points at Wi-Fi-side work: power-save settings,
+  a cheaper wire format, or accepting a buffer-and-burst design instead of
+  real-time streaming.
+- RX degrades sharply once Wi-Fi is running => coexistence is hurting both
+  sides, a harder problem.
+
+That is one flash and one call, and it is now a measurement rather than a
+guess.
+
 ## Hardware session log (this board, this host, 2026-09-18)
 
 - Board enumerated as `/dev/ttyUSB0` (CH340), same board type as `DEBUG-LOG.md`

@@ -1,0 +1,34 @@
+# local_tone SCO bisect — 2026-09-18
+# ESP32 DevKit V1 + Samsung S25 (HFP AG) + second phone as remote caller.
+# Mode: CONFIG_CB_CALL_MODE="local_tone" (800 Hz on-device tone; Wi-Fi,
+# WebSocket and server are dead-code-eliminated from this build).
+# Observed by the operator: remote caller heard a continuous high-pitched
+# tone for the whole call.
+# Extracted from raw serial with:
+#   grep -a -oE '[IWE] \([0-9]+\) callbox: [^\r\n]*' | awk '!seen[$0]++'
+# (the CH340 on this board duplicates buffer content heavily; see
+#  HARDWARE-SESSION-CHECKLIST.md for that quirk)
+
+I (271829) callbox: call setup 1
+I (272119) callbox: HF audio state 3 sync_conn_handle=384 preferred_frame_size=57 (we send 57)
+I (272119) callbox: BT AUDIO UP (mSBC) — local_tone (no Wi-Fi, no server)
+I (273219) callbox: call setup 0
+I (275459) callbox: LOCAL_HFP mode=local_tone queued=444 sent=444 drop=0 bad=0 preferred_frame_size=57
+I (275459) callbox: SCO PKTS rx(total=442,ok=440,err=0,none=2,lost=0) tx(total=444,discard=0)
+I (280459) callbox: LOCAL_HFP mode=local_tone queued=1111 sent=1111 drop=0 bad=0 preferred_frame_size=57
+I (280459) callbox: SCO PKTS rx(total=1108,ok=1101,err=0,none=7,lost=0) tx(total=1111,discard=0)
+I (285459) callbox: LOCAL_HFP mode=local_tone queued=1777 sent=1777 drop=0 bad=0 preferred_frame_size=57
+I (285459) callbox: SCO PKTS rx(total=1775,ok=1743,err=0,none=32,lost=0) tx(total=1777,discard=0)
+I (290459) callbox: LOCAL_HFP mode=local_tone queued=2444 sent=2444 drop=0 bad=0 preferred_frame_size=57
+I (290459) callbox: SCO PKTS rx(total=2442,ok=2400,err=0,none=42,lost=0) tx(total=2444,discard=0)
+I (295459) callbox: LOCAL_HFP mode=local_tone queued=3111 sent=3111 drop=0 bad=0 preferred_frame_size=57
+I (295459) callbox: SCO PKTS rx(total=3108,ok=3063,err=0,none=45,lost=0) tx(total=3111,discard=0)
+I (300459) callbox: LOCAL_HFP mode=local_tone queued=3777 sent=3777 drop=0 bad=0 preferred_frame_size=57
+I (300459) callbox: SCO PKTS rx(total=3775,ok=3728,err=0,none=47,lost=0) tx(total=3777,discard=0)
+I (305459) callbox: LOCAL_HFP mode=local_tone queued=4444 sent=4444 drop=0 bad=0 preferred_frame_size=57
+I (305459) callbox: SCO PKTS rx(total=4442,ok=4393,err=0,none=49,lost=0) tx(total=4444,discard=0)
+I (310459) callbox: SCO PKTS rx(total=5108,ok=5055,err=0,none=53,lost=0) tx(total=5111,discard=0)
+I (315459) callbox: LOCAL_HFP mode=local_tone queued=5777 sent=5777 drop=0 bad=0 preferred_frame_size=57
+I (315459) callbox: SCO PKTS rx(total=5775,ok=5719,err=0,none=56,lost=0) tx(total=5777,discard=0)
+I (319839) callbox: HF audio state 0 sync_conn_handle=65535 preferred_frame_size=0 (we send 57)
+W (319839) callbox: BT AUDIO DOWN — call.end queued

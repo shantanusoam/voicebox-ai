@@ -64,6 +64,23 @@ static sbc_t s_sbc_dec, s_sbc_enc;
 static bool s_sbc_ready;
 static uint32_t s_msbc_decode_fail; /* mSBC decode/frame-size failures, cumulative */
 
+/* local_tone: hardware bisect mode. Generates an 800 Hz tone on-device and
+ * pushes it up the SCO link; Wi-Fi, the WS client and the server are never
+ * started. Isolates the ESP32 -> phone transmit path from everything else. */
+#define MODE_IS(name) (strcmp(CONFIG_CB_CALL_MODE, (name)) == 0)
+/* 800 Hz at 16 kHz is exactly 20 samples per period, so a fixed table has no
+ * phase drift and the audio path stays integer-only. ~ -12 dBFS. */
+static const int16_t TONE_800HZ[20] = {
+        0,  2472,  4702,  6472,  7608,  8000,  7608,  6472,  4702,  2472,
+        0, -2472, -4702, -6472, -7608, -8000, -7608, -6472, -4702, -2472,
+};
+static uint32_t s_tone_phase;
+static uint32_t s_tone_queued;   /* 240-byte chunks generated */
+static uint32_t s_tone_sent;     /* esp_hf_client_audio_data_send returned ESP_OK */
+static uint32_t s_tone_drop;     /* buffer alloc failed, or send returned non-OK */
+static uint32_t s_enc_bad;       /* sbc_encode failed or produced an unexpected size */
+static uint16_t s_preferred_frame_size; /* reported by ESP_HF_CLIENT_AUDIO_STATE_EVT */
+
 /* assembly of decoded mSBC (120 samples = 240 B per frame) into 640-byte wire frames */
 static uint8_t s_asm[CB_FRAME_BYTES + 256]; /* 320 samples + one partial frame slack */
 static size_t s_asm_len;
@@ -100,6 +117,7 @@ static size_t s_accum_len;
  * call is active) must not be allowed to wedge a task forever. */
 static bool send_text_timeout(const char *str, TickType_t timeout)
 {
+    if (!s_ws) return false; /* local_tone never starts the WS client */
     return esp_websocket_client_send_text(s_ws, str, strlen(str), timeout) >= 0;
 }
 
@@ -279,6 +297,18 @@ static void stats_task(void *arg)
 {
     while (1) {
         vTaskDelay(pdMS_TO_TICKS(5000));
+
+        /* SCO controller counters are the ground truth for the transmit path,
+         * far more informative than any application-side frame counter. The
+         * result arrives asynchronously as ESP_HF_CLIENT_PKT_STAT_NUMS_GET_EVT. */
+        if (s_audio_up) {
+            ESP_LOGI(TAG, "LOCAL_HFP mode=%s queued=%" PRIu32 " sent=%" PRIu32
+                     " drop=%" PRIu32 " bad=%" PRIu32 " preferred_frame_size=%u",
+                     CONFIG_CB_CALL_MODE, s_tone_queued, s_tone_sent, s_tone_drop,
+                     s_enc_bad, (unsigned)s_preferred_frame_size);
+            esp_hf_client_pkt_stat_nums_get(s_sync_conn_hdl());
+        }
+
         if (!s_call_active) continue;
         uint64_t in_dropped, in_under, out_dropped, out_under;
         lock_take(s_in_lock);
@@ -348,27 +378,38 @@ static void codec_out_task(void *arg)
         /* feed 240 B (120 samples) per 7.5 ms tick */
         uint8_t chunk[240];
         size_t chunk_len = 0;
-        if (leftover_len) {
-            size_t take = leftover_len > 240 ? 240 : leftover_len;
-            memcpy(chunk, leftover, take);
-            chunk_len = take;
-            memmove(leftover, leftover + take, leftover_len - take);
-            leftover_len -= take;
-        }
-        while (chunk_len < 240) {
-            cb_frame f;
-            bool got;
-            lock_take(s_out_lock);
-            got = cb_ring_pop(&s_out_ring, &f); /* underflow -> silence frame */
-            lock_give(s_out_lock);
-            size_t take = (240 - chunk_len) > CB_FRAME_BYTES ? CB_FRAME_BYTES : (240 - chunk_len);
-            memcpy(chunk + chunk_len, f.data, take);
-            chunk_len += take;
-            if (take < CB_FRAME_BYTES) {
-                memcpy(leftover, f.data + take, CB_FRAME_BYTES - take);
-                leftover_len = CB_FRAME_BYTES - take;
+        if (MODE_IS("local_tone")) {
+            /* No ring, no network: synthesize straight into the chunk. */
+            for (size_t i = 0; i < 240; i += 2) {
+                int16_t s = TONE_800HZ[s_tone_phase];
+                s_tone_phase = (s_tone_phase + 1) % 20;
+                memcpy(&chunk[i], &s, 2);
             }
-            (void)pcm_avail; (void)pcm_in;
+            chunk_len = 240;
+            s_tone_queued++;
+        } else {
+            if (leftover_len) {
+                size_t take = leftover_len > 240 ? 240 : leftover_len;
+                memcpy(chunk, leftover, take);
+                chunk_len = take;
+                memmove(leftover, leftover + take, leftover_len - take);
+                leftover_len -= take;
+            }
+            while (chunk_len < 240) {
+                cb_frame f;
+                bool got;
+                lock_take(s_out_lock);
+                got = cb_ring_pop(&s_out_ring, &f); /* underflow -> silence frame */
+                lock_give(s_out_lock);
+                size_t take = (240 - chunk_len) > CB_FRAME_BYTES ? CB_FRAME_BYTES : (240 - chunk_len);
+                memcpy(chunk + chunk_len, f.data, take);
+                chunk_len += take;
+                if (take < CB_FRAME_BYTES) {
+                    memcpy(leftover, f.data + take, CB_FRAME_BYTES - take);
+                    leftover_len = CB_FRAME_BYTES - take;
+                }
+                (void)got; (void)pcm_avail; (void)pcm_in;
+            }
         }
 
         uint8_t msbc[64];
@@ -379,10 +420,17 @@ static void codec_out_task(void *arg)
             if (ab) {
                 memcpy(ab->data, msbc, ESP_HF_MSBC_ENCODED_FRAME_SIZE);
                 ab->data_len = ESP_HF_MSBC_ENCODED_FRAME_SIZE;
-                if (esp_hf_client_audio_data_send(s_sync_conn_hdl(), ab) != ESP_OK) {
+                if (esp_hf_client_audio_data_send(s_sync_conn_hdl(), ab) == ESP_OK) {
+                    s_tone_sent++;
+                } else {
                     esp_hf_client_audio_buff_free(ab);
+                    s_tone_drop++;
                 }
+            } else {
+                s_tone_drop++;
             }
+        } else {
+            s_enc_bad++;
         }
     }
 }
@@ -476,6 +524,13 @@ static void bridge_on_audio_up(esp_hf_sync_conn_hdl_t hdl)
     lock_take(s_out_lock);  cb_ring_init(&s_out_ring); lock_give(s_out_lock);
     s_asm_len = 0; s_tx_seq = 0; s_out_epoch = 0;
     s_turn_pending = false; s_speech_frames = s_silence_frames = s_collected = 0;
+    s_tone_phase = 0;
+    s_tone_queued = s_tone_sent = s_tone_drop = s_enc_bad = 0;
+    if (MODE_IS("local_tone")) {
+        esp_timer_start_periodic(s_out_timer, 7500);
+        ESP_LOGI(TAG, "BT AUDIO UP (mSBC) — local_tone (no Wi-Fi, no server)");
+        return;
+    }
     s_pending_call_start = true;
     esp_timer_start_periodic(s_out_timer, 7500);
     ESP_LOGI(TAG, "BT AUDIO UP (mSBC) — call.start queued");
@@ -498,8 +553,19 @@ static void hfp_cb(esp_hf_client_cb_event_t event, esp_hf_client_cb_param_t *par
     case ESP_HF_CLIENT_CONNECTION_STATE_EVT:
         ESP_LOGI(TAG, "HF connection state %d", param->conn_stat.state);
         break;
+    case ESP_HF_CLIENT_PKT_STAT_NUMS_GET_EVT:
+        ESP_LOGI(TAG, "SCO PKTS rx(total=%" PRIu32 ",ok=%" PRIu32 ",err=%" PRIu32
+                 ",none=%" PRIu32 ",lost=%" PRIu32 ") tx(total=%" PRIu32 ",discard=%" PRIu32 ")",
+                 param->pkt_nums.rx_total, param->pkt_nums.rx_correct, param->pkt_nums.rx_err,
+                 param->pkt_nums.rx_none, param->pkt_nums.rx_lost,
+                 param->pkt_nums.tx_total, param->pkt_nums.tx_discarded);
+        break;
     case ESP_HF_CLIENT_AUDIO_STATE_EVT:
-        ESP_LOGI(TAG, "HF audio state %d", param->audio_stat.state);
+        s_preferred_frame_size = param->audio_stat.preferred_frame_size;
+        ESP_LOGI(TAG, "HF audio state %d sync_conn_handle=%u preferred_frame_size=%u (we send %u)",
+                 param->audio_stat.state, (unsigned)param->audio_stat.sync_conn_handle,
+                 (unsigned)param->audio_stat.preferred_frame_size,
+                 (unsigned)ESP_HF_MSBC_ENCODED_FRAME_SIZE);
         if (param->audio_stat.state == ESP_HF_CLIENT_AUDIO_STATE_CONNECTED_MSBC) {
             bridge_on_audio_up(param->audio_stat.sync_conn_handle);
         } else if (param->audio_stat.state == ESP_HF_CLIENT_AUDIO_STATE_CONNECTED) {
@@ -610,6 +676,20 @@ void app_main(void)
         return;
     }
     s_sbc_ready = true;
+
+    if (MODE_IS("local_tone")) {
+        /* Hardware bisect: no Wi-Fi, no WS client, no net/rx tasks. Only the
+         * SCO path runs, so nothing else can be blamed for what the remote
+         * caller does or does not hear. codec_in_task still runs to drain and
+         * free the inbound SCO buffers (and give us RX-side counters). */
+        xTaskCreate(codec_in_task, "codecin", 8192, NULL, 6, NULL);
+        xTaskCreate(codec_out_task, "codecout", 6144, NULL, 7, NULL);
+        xTaskCreate(stats_task, "stats", 3072, NULL, 3, NULL);
+        bt_init();
+        ESP_LOGW(TAG, "LOCAL_TONE MODE — 800 Hz test tone, Wi-Fi/server disabled."
+                      " Pair your phone with ESP_HFP_HF");
+        return;
+    }
 
     wifi_init();
     EventBits_t bits = xEventGroupWaitBits(s_events, EV_WIFI_OK, pdFALSE, pdFALSE,
