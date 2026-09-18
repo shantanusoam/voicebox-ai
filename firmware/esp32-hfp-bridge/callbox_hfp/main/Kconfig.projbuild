@@ -1,0 +1,31 @@
+menu "CallBox Device Configuration"
+
+    config CB_WIFI_SSID
+        string "Wi-Fi SSID"
+        default "callbox-lab"
+
+    config CB_WIFI_PASS
+        string "Wi-Fi password"
+        default ""
+
+    config CB_SERVER_URI
+        string "CallBox WebSocket URI"
+        default "ws://<PC-LAN-IP>:8787/ws/device"
+
+    config CB_DEVICE_ID
+        string "Device ID from POST /api/devices"
+        default "dev_REPLACE"
+
+    config CB_DEVICE_TOKEN
+        string "Device token from POST /api/devices"
+        default "REPLACE_ME"
+
+    config CB_CALL_MODE
+        string "Call mode: echo or agent"
+        default "echo"
+
+    config CB_VAD_THRESHOLD
+        int "Speech gate RMS threshold (0-32767)"
+        default 900
+
+endmenu
