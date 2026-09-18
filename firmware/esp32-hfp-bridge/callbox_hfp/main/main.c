@@ -206,6 +206,10 @@ static void handle_message(const char *msg, size_t len)
 
     if (strcmp(type, "ready") == 0) {
         ESP_LOGI(TAG, "READY (device authenticated)");
+        /* Automatic WS reconnect must re-bind an already-live SCO call to a
+         * fresh server call. The old server connection finalizes its call on
+         * disconnect, so call.start is the recovery operation. */
+        if (s_audio_up && !s_call_active) s_pending_call_start = true;
     } else if (strcmp(type, "call.started") == 0) {
         const char *cid = cJSON_GetStringValue(cJSON_GetObjectItem(root, "call_id"));
         snprintf(s_call_id, sizeof(s_call_id), "%s", cid ? cid : "");
@@ -372,10 +376,14 @@ static void stats_task(void *arg)
         lock_take(s_out_lock);
         out_dropped = s_out_ring.dropped; out_under = s_out_ring.underflows;
         lock_give(s_out_lock);
-        ESP_LOGI(TAG, "STATS msbc_fail=%" PRIu32 " net_send_drop=%" PRIu32 " in(drop=%llu,under=%llu) "
-                 "out(drop=%llu,under=%llu) tx_seq=%" PRIu32,
-                 s_msbc_decode_fail, s_net_send_drop, (unsigned long long)in_dropped, (unsigned long long)in_under,
-                 (unsigned long long)out_dropped, (unsigned long long)out_under, s_tx_seq);
+        ESP_LOGI(TAG, "STATS msbc_fail=%" PRIu32 " net_send_drop=%" PRIu32
+                 " rxq_drop=%" PRIu32 " rx_alloc_fail=%" PRIu32
+                 " in(drop=%llu,under=%llu,high=%u) out(drop=%llu,under=%llu,high=%u) tx_seq=%" PRIu32,
+                 s_msbc_decode_fail, s_net_send_drop, s_rxq_drop, s_rx_alloc_fail,
+                 (unsigned long long)in_dropped, (unsigned long long)in_under,
+                 (unsigned)s_in_ring.high_water,
+                 (unsigned long long)out_dropped, (unsigned long long)out_under,
+                 (unsigned)s_out_ring.high_water, s_tx_seq);
     }
 }
 
@@ -554,7 +562,12 @@ static void ws_event_handler(void *handler_args, esp_event_base_t base,
             rx_msg m = { .data = malloc(s_accum_len), .len = s_accum_len };
             if (m.data) {
                 memcpy(m.data, s_accum, s_accum_len);
-                if (xQueueSend(s_rxq, &m, 0) != pdTRUE) free(m.data);
+                if (xQueueSend(s_rxq, &m, 0) != pdTRUE) {
+                    s_rxq_drop++;
+                    free(m.data);
+                }
+            } else {
+                s_rx_alloc_fail++;
             }
             s_accum_len = 0;
         }
@@ -564,6 +577,13 @@ static void ws_event_handler(void *handler_args, esp_event_base_t base,
         xEventGroupClearBits(s_events, EV_WS_OPEN);
         s_call_active = false;
         s_call_id[0] = '\0';
+        s_turn_pending = false;
+        s_commit_requested = false;
+        s_pending_commit_id[0] = '\0';
+        /* The server finalizes the old call when its socket disappears.
+         * A stale call.end from that connection is no longer useful. */
+        s_pending_call_end = false;
+        if (s_audio_up) s_pending_call_start = true;
         break;
     case WEBSOCKET_EVENT_ERROR:
         ESP_LOGE(TAG,
