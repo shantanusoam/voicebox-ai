@@ -49,6 +49,7 @@ static volatile bool s_turn_pending;       /* agent: commit sent, awaiting turn.
 static volatile bool s_commit_requested;    /* agent: end-of-turn seen; drain audio then commit */
 static char s_pending_commit_id[40];
 static volatile bool s_pending_call_start;  /* retry until the request is actually submitted */
+static volatile bool s_call_start_inflight; /* submitted; waiting for call.started */
 static volatile bool s_pending_call_end;    /* retry until the request is actually submitted */
 static char s_pending_call_end_id[64];
 static uint32_t s_tx_seq, s_out_epoch, s_capture_epoch;
@@ -210,12 +211,13 @@ static void handle_message(const char *msg, size_t len)
         /* Automatic WS reconnect must re-bind an already-live SCO call to a
          * fresh server call. The old server connection finalizes its call on
          * disconnect, so call.start is the recovery operation. */
-        if (s_audio_up && !s_call_active) s_pending_call_start = true;
+        if (s_audio_up && !s_call_active && !s_call_start_inflight) s_pending_call_start = true;
     } else if (strcmp(type, "call.started") == 0) {
         const char *cid = cJSON_GetStringValue(cJSON_GetObjectItem(root, "call_id"));
         snprintf(s_call_id, sizeof(s_call_id), "%s", cid ? cid : "");
         s_tx_seq = 0;
         s_capture_epoch = 0;
+        s_call_start_inflight = false;
         s_call_active = true;
         s_turn_pending = false;
         s_commit_requested = false;
@@ -402,10 +404,11 @@ static void net_tx_task(void *arg)
         EventBits_t bits = xEventGroupGetBits(s_events);
         bool ws_ready = (bits & EV_WS_OPEN) != 0;
 
-        if (s_pending_call_start && ws_ready) {
+        if (s_pending_call_start && !s_call_start_inflight && ws_ready) {
             if (send_simple("{\"type\":\"call.start\",\"mode\":\"%s\",\"consent\":true}",
                             CONFIG_CB_CALL_MODE)) {
                 s_pending_call_start = false;
+                s_call_start_inflight = true;
             }
         }
         if (s_pending_call_end && ws_ready) {
@@ -571,7 +574,7 @@ static void ws_event_handler(void *handler_args, esp_event_base_t base,
                 m.data[s_accum_len] = '\0';
                 /* Audio playback may be dropped under pressure; state/control
                  * messages must not sit behind a burst of audio.output. */
-                bool is_audio = strstr((const char *)m.data, "\"type\":\"audio.output\"") != NULL;
+                bool is_audio = strstr((const char *)m.data, "\"audio.output\"") != NULL;
                 QueueHandle_t target = is_audio ? s_rxq : s_ctrl_rxq;
                 if (xQueueSend(target, &m, 0) != pdTRUE) {
                     if (is_audio) s_rxq_drop++; else s_ctrl_rxq_drop++;
@@ -594,6 +597,7 @@ static void ws_event_handler(void *handler_args, esp_event_base_t base,
         /* The server finalizes the old call when its socket disappears.
          * A stale call.end from that connection is no longer useful. */
         s_pending_call_end = false;
+        s_call_start_inflight = false;
         if (s_audio_up) s_pending_call_start = true;
         break;
     case WEBSOCKET_EVENT_ERROR:
