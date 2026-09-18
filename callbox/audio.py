@@ -6,6 +6,7 @@ import binascii
 import io
 import math
 import sys
+import struct
 import wave
 from .errors import AppError
 
@@ -13,6 +14,9 @@ SAMPLE_RATE = 16000
 FRAME_SAMPLES = 320
 FRAME_BYTES = FRAME_SAMPLES * 2
 MAX_TURN_BYTES = SAMPLE_RATE * 2 * 15
+AUDIO_BATCH_MAGIC = b'CBA1'
+AUDIO_BATCH_HEADER = struct.Struct('>4sBBHII')
+MAX_AUDIO_BATCH_FRAMES = 8
 
 # Below this RMS (of a 32768 full-scale signal) a turn is treated as having no
 # speech in it. Measured reference points: digital silence 0, a quiet room
@@ -35,6 +39,41 @@ def decode_frame(message):
     if isinstance(seq, bool) or not isinstance(seq, int) or not 0 <= seq <= 2**31 - 1:
         raise AppError(422, 'sequence', 'Frame sequence must be a nonnegative integer.')
     return pcm, seq
+
+
+def pack_audio_batch(frames, first_seq: int, epoch: int = 0) -> bytes:
+    """Versioned binary audio batch used by constrained hardware transports.
+
+    Header (network byte order): magic[4], frame_count u8, flags u8,
+    frame_bytes u16, first_seq u32, epoch u32; followed by raw PCM frames.
+    """
+    frames = list(frames)
+    if not 1 <= len(frames) <= MAX_AUDIO_BATCH_FRAMES:
+        raise ValueError('audio batch must contain 1..8 frames')
+    if not 0 <= first_seq <= 2**31 - 1 or not 0 <= epoch <= 2**32 - 1:
+        raise ValueError('invalid audio batch sequence or epoch')
+    if any(not isinstance(frame, (bytes, bytearray)) or len(frame) != FRAME_BYTES for frame in frames):
+        raise ValueError('audio batch frames must be 640-byte PCM16 frames')
+    header = AUDIO_BATCH_HEADER.pack(
+        AUDIO_BATCH_MAGIC, len(frames), 0, FRAME_BYTES, first_seq, epoch
+    )
+    return header + b''.join(frames)
+
+
+def unpack_audio_batch(payload: bytes):
+    if not isinstance(payload, (bytes, bytearray)) or len(payload) < AUDIO_BATCH_HEADER.size:
+        raise AppError(422, 'audio_batch', 'Invalid binary audio batch.')
+    magic, count, flags, frame_bytes, first_seq, epoch = AUDIO_BATCH_HEADER.unpack_from(payload)
+    if magic != AUDIO_BATCH_MAGIC or flags != 0 or frame_bytes != FRAME_BYTES:
+        raise AppError(422, 'audio_batch', 'Unsupported binary audio batch format.')
+    if not 1 <= count <= MAX_AUDIO_BATCH_FRAMES or first_seq > 2**31 - 1:
+        raise AppError(422, 'audio_batch', 'Invalid binary audio batch metadata.')
+    expected = AUDIO_BATCH_HEADER.size + count * FRAME_BYTES
+    if len(payload) != expected:
+        raise AppError(422, 'audio_batch', 'Binary audio batch length does not match its header.')
+    start = AUDIO_BATCH_HEADER.size
+    frames = [bytes(payload[start+i*FRAME_BYTES:start+(i+1)*FRAME_BYTES]) for i in range(count)]
+    return {'type':'audio.batch', 'first_seq':first_seq, 'epoch':epoch, 'frames':frames}
 
 
 def pcm_rms(pcm: bytes) -> float:
@@ -125,14 +164,20 @@ async def resample_async(wav_bytes: bytes) -> bytes:
 class AudioBuffer:
     def __init__(self):
         self.data = bytearray(); self.seq = -1; self.epoch = 0
-    def add(self, message):
-        if message.get('epoch', 0) != self.epoch: raise AppError(409, 'stale_audio', 'Audio belongs to a cancelled playback epoch.')
-        pcm, seq = decode_frame(message)
+    def add_pcm(self, pcm: bytes, seq: int, epoch: int = 0):
+        if epoch != self.epoch: raise AppError(409, 'stale_audio', 'Audio belongs to a cancelled playback epoch.')
+        if not isinstance(pcm, (bytes, bytearray)) or len(pcm) != FRAME_BYTES:
+            raise AppError(422, 'frame_size', 'Every frame must contain exactly 640 bytes (20 ms).')
+        if isinstance(seq, bool) or not isinstance(seq, int) or not 0 <= seq <= 2**31 - 1:
+            raise AppError(422, 'sequence', 'Frame sequence must be a nonnegative integer.')
         if seq != self.seq + 1: raise AppError(409, 'sequence', 'Out-of-order or missing audio frame.')
         if len(self.data) + len(pcm) > MAX_TURN_BYTES:
             raise AppError(413, 'audio_buffer_full', 'Commit or interrupt before the 15-second turn limit.')
         self.seq = seq; self.data.extend(pcm)
-        return pcm
+        return bytes(pcm)
+    def add(self, message):
+        pcm, seq = decode_frame(message)
+        return self.add_pcm(pcm, seq, message.get('epoch', 0))
     def take(self):
         pcm = bytes(self.data); self.data.clear()
         return pcm
