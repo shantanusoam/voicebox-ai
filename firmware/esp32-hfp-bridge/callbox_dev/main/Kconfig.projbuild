@@ -1,0 +1,27 @@
+menu "CallBox Device Configuration"
+
+    config CB_WIFI_SSID
+        string "Wi-Fi SSID"
+        default "callbox-lab"
+
+    config CB_WIFI_PASS
+        string "Wi-Fi password"
+        default ""
+
+    config CB_SERVER_URI
+        string "CallBox WebSocket URI"
+        default "ws://192.168.1.10:8787/ws/device"
+
+    config CB_DEVICE_ID
+        string "Device ID from POST /api/devices"
+        default "dev_REPLACE"
+
+    config CB_DEVICE_TOKEN
+        string "Device token from POST /api/devices"
+        default "REPLACE_ME"
+
+    config CB_TEST_FRAMES
+        int "Synthetic frames to send in echo test"
+        default 150
+
+endmenu
