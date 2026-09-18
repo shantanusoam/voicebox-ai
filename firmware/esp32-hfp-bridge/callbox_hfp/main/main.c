@@ -51,7 +51,7 @@ static char s_pending_commit_id[40];
 static volatile bool s_pending_call_start;  /* retry until the request is actually submitted */
 static volatile bool s_pending_call_end;    /* retry until the request is actually submitted */
 static char s_pending_call_end_id[64];
-static uint32_t s_tx_seq, s_out_epoch;
+static uint32_t s_tx_seq, s_out_epoch, s_capture_epoch;
 static uint32_t s_turn_counter;
 
 /* rings (external sync required by the ring contract) */
@@ -172,7 +172,7 @@ static bool send_audio_batch(cb_frame *frames, size_t count, uint32_t first_seq)
     p[5] = 0; /* flags */
     put_be16(p + 6, CB_FRAME_BYTES);
     put_be32(p + 8, first_seq);
-    put_be32(p + 12, 0); /* capture epoch; v1 stays zero */
+    put_be32(p + 12, s_capture_epoch);
     for (size_t i = 0; i < count; ++i) {
         memcpy(p + AUDIO_BATCH_HEADER_BYTES + i * CB_FRAME_BYTES,
                frames[i].data, CB_FRAME_BYTES);
@@ -214,6 +214,7 @@ static void handle_message(const char *msg, size_t len)
         const char *cid = cJSON_GetStringValue(cJSON_GetObjectItem(root, "call_id"));
         snprintf(s_call_id, sizeof(s_call_id), "%s", cid ? cid : "");
         s_tx_seq = 0;
+        s_capture_epoch = 0;
         s_call_active = true;
         s_turn_pending = false;
         s_commit_requested = false;
@@ -237,6 +238,10 @@ static void handle_message(const char *msg, size_t len)
     } else if (strcmp(type, "playback.clear") == 0) {
         cJSON *ep = cJSON_GetObjectItem(root, "epoch");
         s_out_epoch = (ep && cJSON_IsNumber(ep)) ? (uint32_t)ep->valuedouble : s_out_epoch + 1;
+        /* playback.clear is the server's epoch barrier. Keep future microphone
+         * audio on the same epoch so a barge-in does not make all subsequent
+         * capture stale at AudioBuffer.add(). */
+        s_capture_epoch = s_out_epoch;
         lock_take(s_out_lock);
         cb_ring_interrupt(&s_out_ring, s_out_epoch);
         lock_give(s_out_lock);
@@ -698,7 +703,7 @@ static void bridge_on_audio_up(esp_hf_sync_conn_hdl_t hdl)
 
     lock_take(s_in_lock);   cb_ring_init(&s_in_ring);  lock_give(s_in_lock);
     lock_take(s_out_lock);  cb_ring_init(&s_out_ring); lock_give(s_out_lock);
-    s_asm_len = 0; s_tx_seq = 0; s_out_epoch = 0;
+    s_asm_len = 0; s_tx_seq = 0; s_out_epoch = 0; s_capture_epoch = 0;
     s_turn_pending = false; s_speech_frames = s_silence_frames = s_collected = 0;
 
     if (local_hfp_test_enabled()) {
