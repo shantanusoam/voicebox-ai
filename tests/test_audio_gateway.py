@@ -48,6 +48,15 @@ def test_audio_interrupt_discards_input_and_increments_epoch():
     with pytest.raises(AppError):b.add(frame(1,0))
     assert len(b.add(frame(1,1)))==640
 
+
+def test_audio_buffer_recovers_small_forward_gap_with_silence():
+    b=AudioBuffer()
+    b.add(frame(0))
+    b.add(frame(3))
+    assert b.seq==3 and b.lost_frames==2
+    assert len(b.data)==4*FRAME_BYTES
+    assert b.data[FRAME_BYTES:3*FRAME_BYTES]==b'\0'*(2*FRAME_BYTES)
+
 @pytest.mark.parametrize('change',[{'sample_rate':8000},{'channels':2},{'seq':-1},{'seq':True},{'seq':1},
                                  {'pcm16':'not base64'},{'pcm16':base64.b64encode(b'abc').decode()},{'epoch':9}])
 def test_frame_validation(change):
