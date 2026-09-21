@@ -24,6 +24,7 @@
 #include "cJSON.h"
 #include "mbedtls/base64.h"
 #include "esp_websocket_client.h"
+#include "esp_crt_bundle.h"
 #include "esp_bt.h"
 #include "esp_bt_main.h"
 #include "esp_bt_device.h"
@@ -981,10 +982,17 @@ void app_main(void)
      * the actual call-breaking bugs. Coexistence still affects throughput,
      * but it is not the primary correctness failure. */
 
+    /* wss:// needs an explicit server-verification choice. Having
+     * CONFIG_MBEDTLS_CERTIFICATE_BUNDLE compiled in is not enough: without
+     * attaching it here esp-tls refuses to build the context at all with
+     * "No server verification option set in esp_tls_cfg_t structure" ->
+     * ESP_ERR_MBEDTLS_SSL_SETUP_FAILED, and the client never connects.
+     * Ignored for plain ws:// URIs, so this is safe for both transports. */
     const esp_websocket_client_config_t ws_cfg = {
         .uri = CONFIG_CB_SERVER_URI,
         .buffer_size = 4096,
         .network_timeout_ms = 10000,
+        .crt_bundle_attach = esp_crt_bundle_attach,
     };
     s_ws = esp_websocket_client_init(&ws_cfg);
     esp_websocket_register_events(s_ws, WEBSOCKET_EVENT_ANY, ws_event_handler, NULL);
