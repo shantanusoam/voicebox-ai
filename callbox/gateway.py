@@ -9,13 +9,59 @@ import re
 import time
 from fastapi import WebSocket, WebSocketDisconnect
 from .audio import (AudioBuffer, FRAME_BYTES, SAMPLE_RATE, to_wav, resample_async,
-    unpack_audio_batch, pack_audio_batch, DOWNLINK_BATCH_FRAMES, DOWNLINK_BATCH_MAGIC)
+    unpack_audio_batch, pack_audio_batch, pack_adpcm_batch,
+    DOWNLINK_BATCH_FRAMES, DOWNLINK_BATCH_MAGIC)
+from .adpcm import encode_frame as encode_adpcm_frame
 from .errors import AppError
 
 
 AUTH_RECHECK_SECONDS = 5
 TOUCH_FLUSH_SECONDS = 1
 LOG = logging.getLogger(__name__)
+
+
+async def send_paced_downlink(ws, output, epoch, current_epoch, codec='binary'):
+    """Prime 12 frames, then send no faster than the 20 ms playback clock.
+
+    The ESP32 has one 20-frame receive/playback queue. A large initial burst
+    overran its former 8-frame ingress queue, while 0.92x real-time pacing
+    eventually filled even the larger queue. Slow writes may cause a playout
+    gap; never catch up by bursting stale audio into a bounded device queue.
+    """
+    step = DOWNLINK_BATCH_FRAMES
+    adpcm_state = (0, 0)
+    for index in range(0, len(output), step * FRAME_BYTES):
+        if index >= 2 * step * FRAME_BYTES:
+            await asyncio.sleep(step * 0.02)
+        if current_epoch() != epoch:
+            return
+        chunk = [output[start:start+FRAME_BYTES].ljust(FRAME_BYTES, b'\0')
+                 for start in range(index, min(index + step * FRAME_BYTES, len(output)), FRAME_BYTES)]
+        if codec == 'adpcm':
+            blocks = []
+            for frame in chunk:
+                block, adpcm_state = encode_adpcm_frame(frame, adpcm_state)
+                blocks.append(block)
+            payload = pack_adpcm_batch(blocks, index // FRAME_BYTES, epoch)
+        else:
+            payload = pack_audio_batch(chunk, index // FRAME_BYTES, epoch, DOWNLINK_BATCH_MAGIC)
+        await ws.send_bytes(payload)
+
+
+async def send_binary_echo(ws, echoed, epoch, codec):
+    for i in range(0, len(echoed), DOWNLINK_BATCH_FRAMES):
+        group = echoed[i:i+DOWNLINK_BATCH_FRAMES]
+        frames = [pcm for _, pcm in group]
+        if codec == 'adpcm':
+            state = (0, 0)
+            blocks = []
+            for frame in frames:
+                block, state = encode_adpcm_frame(frame, state)
+                blocks.append(block)
+            payload = pack_adpcm_batch(blocks, group[0][0], epoch)
+        else:
+            payload = pack_audio_batch(frames, group[0][0], epoch, DOWNLINK_BATCH_MAGIC)
+        await ws.send_bytes(payload)
 
 
 class Gateway:
@@ -83,20 +129,9 @@ class Gateway:
                 await send({'type':'turn.result','call_id':call_id,'epoch':epoch, **result})
                 wav = await self.provider.speak(result['reply'], wav=True)
                 output = await resample_async(wav)
-                if binary_downlink:
-                    frames = [output[i:i+FRAME_BYTES].ljust(FRAME_BYTES, b'\0')
-                              for i in range(0, len(output), FRAME_BYTES)]
-                    step = DOWNLINK_BATCH_FRAMES
-                    for index in range(0, len(frames), step):
-                        if buffer.epoch != epoch: return
-                        chunk = frames[index:index+step]
-                        await ws.send_bytes(pack_audio_batch(
-                            chunk, index, epoch, DOWNLINK_BATCH_MAGIC))
-                        # Prime the device's jitter buffer fast (first two
-                        # batches un-paced), then pace just under real time so
-                        # the buffer keeps a cushion against radio hiccups.
-                        if index >= 2 * step:
-                            await asyncio.sleep(step * 0.02 * 0.92)
+                if downlink_codec:
+                    await send_paced_downlink(ws, output, epoch, lambda: buffer.epoch,
+                                              downlink_codec)
                 else:
                     for index, start in enumerate(range(0, len(output), FRAME_BYTES)):
                         if buffer.epoch != epoch: return
@@ -136,12 +171,9 @@ class Gateway:
                 with contextlib.suppress(Exception):
                     await stale.close(1012, 'Replaced by a newer connection')
             self.connections[did] = ws; own_connection = True
-            # callbox.v1 downlink negotiation: a device that advertises
-            # "downlink":"binary" receives TTS as CBB1 binary batches instead
-            # of one JSON audio.output per frame. Cuts per-frame overhead ~30%
-            # and messages 10x — SCO/Wi-Fi coexistence on the ESP32 needs the
-            # airtime more than it needs JSON debuggability.
-            binary_downlink = hello.get('downlink') == 'binary'
+            # Negotiated CBB1 PCM or CBB2 IMA ADPCM; unrecognised/old devices
+            # retain JSON audio.output. The codec is a per-connection choice.
+            downlink_codec = hello.get('downlink') if hello.get('downlink') in {'binary', 'adpcm'} else None
             self.db.touch_device(did)
             self.db.event(workspace, 'device.connected', 'Lab gateway connected')
             await send({'type':'ready','protocol':'callbox.v1','device_id':did,'sample_rate':SAMPLE_RATE,
@@ -193,8 +225,13 @@ class Gateway:
                         pending_frames += 1
                         if mode == 'echo':
                             buffer.take()
-                            await send({'type':'audio.output','call_id':cid,'epoch':buffer.epoch,
-                                        'seq':message['seq'],'sample_rate':SAMPLE_RATE,'pcm16':base64.b64encode(pcm).decode()})
+                            if downlink_codec:
+                                await send_binary_echo(ws, [(message['seq'], pcm)],
+                                                       buffer.epoch, downlink_codec)
+                            else:
+                                await send({'type':'audio.output','call_id':cid,'epoch':buffer.epoch,
+                                            'seq':message['seq'],'sample_rate':SAMPLE_RATE,
+                                            'pcm16':base64.b64encode(pcm).decode()})
                     elif kind == 'audio.batch':
                         frames = message['frames']
                         first_seq = message['first_seq']
@@ -205,13 +242,14 @@ class Gateway:
                             echoed.append((seq, buffer.add_pcm(pcm, seq, epoch)))
                             pending_frames += 1
                         if mode == 'echo':
-                            # Echo each logical 20 ms frame so the existing
-                            # device downlink remains protocol-compatible.
                             buffer.take()
-                            for seq, pcm in echoed:
-                                await send({'type':'audio.output','call_id':cid,'epoch':buffer.epoch,
-                                            'seq':seq,'sample_rate':SAMPLE_RATE,
-                                            'pcm16':base64.b64encode(pcm).decode()})
+                            if downlink_codec:
+                                await send_binary_echo(ws, echoed, buffer.epoch, downlink_codec)
+                            else:
+                                for seq, pcm in echoed:
+                                    await send({'type':'audio.output','call_id':cid,'epoch':buffer.epoch,
+                                                'seq':seq,'sample_rate':SAMPLE_RATE,
+                                                'pcm16':base64.b64encode(pcm).decode()})
                     elif kind == 'audio.commit':
                         if mode != 'agent': raise AppError(409, 'mode', 'Echo mode does not send audio to a model.')
                         if generation_task and not generation_task.done(): raise AppError(409,'busy','Interrupt or wait for the current turn.')

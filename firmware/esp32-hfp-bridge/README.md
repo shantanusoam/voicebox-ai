@@ -43,6 +43,7 @@ idf.py set-target esp32
 #   sdkconfig: CONFIG_CB_WIFI_SSID / CONFIG_CB_WIFI_PASS
 #   sdkconfig: CONFIG_CB_SERVER_URI / CONFIG_CB_DEVICE_ID / CONFIG_CB_DEVICE_TOKEN
 #   sdkconfig: CONFIG_CB_CALL_MODE ("local_echo", "local_tone", "echo" or "agent")
+#   sdkconfig: CONFIG_CB_DOWNLINK_CODEC ("binary" or "adpcm")
 idf.py build
 ```
 
@@ -81,12 +82,37 @@ is shown once.
 
 - CVSD air mode (8 kHz) is rejected with a log error, not transcoded. WBS/mSBC
   is required (S25 negotiates mSBC).
-- Agent mode (paid STT/TTS through the server) is implemented on the device
-  (RMS speech gate, `audio.commit`, turn gating) but has NOT been verified on
-  hardware yet.
+- Agent mode reached the S25 end to end on 2026-09-26, but speech playback
+  was only ~10% intelligible. The new playback/ADPCM candidate has no live
+  hardware result yet; see `DEBUG-LOG.md`.
 - No sample-clock pacing of network TX beyond the SCO arrival rate; no jitter
   measurement; no long-call soak test; no Wi-Fi loss/roaming failure tests.
 - Echo cancellation: the phone's AG handles echo; there is no local AEC.
+
+## Downlink experiment after 625913d
+
+The candidate branch replaces the 8-frame ingress ring plus 20-frame jitter
+queue with one 20-frame queue, primed at 12 frames. This removes duplicate
+storage and makes `out(drop=...,under=...,high=...,queued=...)` report actual
+playback queue loss. The server sends two CBB1/CBB2 batches immediately, then
+one batch per 120 ms of audio instead of 0.92x real-time. Echo uses the
+negotiated binary downlink too, making echo a useful transport comparison.
+
+`CONFIG_CB_DOWNLINK_CODEC="binary"` sends 640-byte PCM frames in CBB1 batches.
+`"adpcm"` sends independent 164-byte IMA ADPCM blocks in CBB2 batches. The
+firmware decodes them into PCM before the existing mSBC encoder. The latter
+reduces the downlink audio payload from 32 KB/s to 8.2 KB/s; intelligibility
+and coexistence **have not been measured on the phone**. The host tests cover
+Python/C decoder parity, queue burst/epoch behavior and gateway wire format.
+An older server falls back to JSON when it does not understand `adpcm`.
+
+For the hardware gate, flash the exact candidate branch, record the build
+SHA and `sdkconfig` values, and compare binary and adpcm on the same phone,
+AP/channel and 10-second synthetic TTS sample. Collect fresh `STATS`, `HEAP`
+and `SCO PKTS` logs plus server-side arrival timing. The CH340 can replay
+stale lines, so cross-check sequence and call timestamps. A pass needs stable
+pairing, no playback drops during the sample, sustained speech intelligibility
+and bounded first-audio delay; the repository's host suite cannot claim that.
 
 
 ## Voice/echo troubleshooting order

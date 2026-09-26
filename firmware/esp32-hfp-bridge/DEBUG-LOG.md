@@ -232,3 +232,20 @@ promise:
 Serial measurement caveat: the CH340 stale-buffer glitch (48 MB/min of one
 repeated line) returned during this session; verify STATS via a fresh
 capture or trust server-side counters instead.
+
+## Candidate follow-up (software only; not flashed or heard)
+
+The former receive path accepted two immediate 6-frame CBB1 batches into an
+8-frame ring before a separate 20-frame jitter queue. If the playback task
+did not drain between those network events, four frames were silently
+rejected; `dl_frames` still increased. The 0.92x server sleep also fed audio
+faster than the playback clock over a long reply. These are software loss
+paths, so the earlier ~10% subjective intelligibility does not yet establish
+the physical RF ceiling.
+
+The candidate branch uses one 20-frame playback queue, counts only accepted
+frames, logs queue drop/underflow/occupancy and heap, sends at the 20 ms clock,
+and adds negotiated CBB2/IMA ADPCM (164 bytes per 20 ms) for a 4x smaller
+downlink. Host tests and the gateway eval do not include SCO+Wi-Fi RF. First
+flash and compare CBB1 vs CBB2 on the S25, then measure packet arrivals and
+RF throughput before declaring a hardware limit or moving to UDP.
