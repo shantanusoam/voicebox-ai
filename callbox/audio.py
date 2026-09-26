@@ -116,9 +116,11 @@ def wav_to_pcm16(wav_bytes: bytes):
             if wav.getnchannels() != 1 or wav.getsampwidth() != 2:
                 raise AppError(502, 'tts_format', 'Expected mono PCM16 WAV from speech provider.')
             rate = wav.getframerate()
-            if not 8000 <= rate <= 48000 or wav.getnframes()/rate > 60:
-                raise AppError(502, 'tts_format', 'Unsupported rate or oversized generated speech.')
             data = wav.readframes(wav.getnframes())
+            # Streaming WAVs (e.g. gpt-4o-mini-tts) declare 0xFFFFFFFF frames.
+            # Trust the bytes actually read, not the header's claimed count.
+            if not 8000 <= rate <= 48000 or len(data) // (2 * rate) > 60:
+                raise AppError(502, 'tts_format', 'Unsupported rate or oversized generated speech.')
     except (wave.Error, EOFError): raise AppError(502, 'tts_format', 'Provider response is not a PCM WAV file.')
     return resample_pcm16(data, rate)
 

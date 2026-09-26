@@ -162,3 +162,44 @@ cp ~/voicebox-ai/.env.example ~/voicebox-ai/.env  # then edit CALLBOX_PROVIDER/O
 # then restart the unit:
 systemctl --user restart callbox-srv2
 ```
+
+## Session addendum (2026-09-26): agent mode reached end-to-end audio
+
+Continuing from the state above, agent mode was taken to first live audio.
+Machine was rebooted between sessions: transient units and /tmp vanish — the
+server must be restarted (systemd-run command above) and ufw rules persist.
+
+Two more blockers found and fixed today:
+
+6. **The working tree was stuck mid-rebase**, silently serving an OLD
+   gateway.py (`receive_text()` only) while the firmware sent binary batches.
+   Every first binary batch killed the connection with a suppressed TypeError
+   ("Gateway disconnected", no traceback). The binary gateway commit exists
+   (e228deb) but the stalled rebase hid it. Lesson: when serial and API
+   disagree, check `git status` for a rebase before debugging protocol code.
+   Testing now happens from a worktree pinned to the PR #8 merge (8d8b24d).
+
+7. **gpt-4o-mini-tts returns a STREAMING WAV** whose RIFF header declares
+   0xFFFFFFFF frames. `wave.getnframes()/rate > 60` then always trips and the
+   reply was discarded as tts_format before reaching the phone. Fixed in
+   callbox/audio.py by validating the bytes actually read, not the header
+   count. (One billed TTS call was used to capture the payload and prove the
+   magic bytes: `RIFF\xff\xff\xff\xffWAVE`.)
+
+Also fixed on the device: a playback jitter buffer (24-frame staging, 14-frame
+prime, re-prime on starvation) because the downlink arrives in bursts while
+SCO runs.
+
+STT now transcribes real speech (one turn transcribed "Hello?" as Urdu
+"ہیلو" — language forcing may be worth configuring), the agent replied and
+queued staff review correctly, and the AI's generated voice REACHED THE PHONE
+audibly. Remaining quality problem, confirmed live and matching the known
+issues above: simultaneous SCO + Wi-Fi collapses the downlink (uvicorn
+keepalive pings fail under the TTS send loop; playback arrives ~10%
+intelligible). Next engineering step: binary DOWNLINK batches (server +
+device), then Gate C.
+
+Server for testing: worktree at the PR #8 merge, user unit `callbox-good`,
+same env vars as above. The debug PCM dump trick (env-gated write of
+committed turns to /tmp) proved invaluable for content diagnosis; keep it in
+mind, keep it out of commits.

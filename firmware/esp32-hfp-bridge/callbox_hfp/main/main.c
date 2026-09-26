@@ -507,41 +507,85 @@ static void out_timer_cb(void *arg)
     xSemaphoreGive(s_out_tick);
 }
 
+/* Playback jitter buffer: the Wi-Fi downlink degrades while SCO is active
+ * (BT/Wi-Fi coexistence), so frames arrive in bursts. Stage ~300 ms before
+ * starting playout; re-prime after a starvation gap instead of emitting
+ * choppy fragments. Static allocation: no heap work in the audio path. */
+#define JITTER_FRAMES 24
+#define JITTER_PRIME 14
+static cb_frame s_jitter[JITTER_FRAMES];
+static size_t s_j_head, s_j_count;
+static bool s_j_primed;
+
+static bool jitter_push(const cb_frame *f)
+{
+    if (s_j_count >= JITTER_FRAMES) return false;
+    size_t tail = (s_j_head + s_j_count) % JITTER_FRAMES;
+    s_jitter[tail] = *f;
+    s_j_count++;
+    return true;
+}
+
+static bool jitter_pop(cb_frame *out)
+{
+    if (s_j_count == 0) return false;
+    *out = s_jitter[s_j_head];
+    s_j_head = (s_j_head + 1) % JITTER_FRAMES;
+    s_j_count--;
+    return true;
+}
+
+static void jitter_reset(void)
+{
+    s_j_head = s_j_count = 0;
+    s_j_primed = false;
+}
+
 static void codec_out_task(void *arg)
 {
-    uint8_t pcm_in[CB_FRAME_BYTES];
-    size_t pcm_avail = 0;
     uint8_t leftover[CB_FRAME_BYTES];
     size_t leftover_len = 0;
 
     while (1) {
         if (xSemaphoreTake(s_out_tick, portMAX_DELAY) != pdTRUE) continue;
-        if (!s_audio_up || !s_sbc_ready) { pcm_avail = leftover_len = 0; continue; }
+        if (!s_audio_up || !s_sbc_ready) { leftover_len = 0; jitter_reset(); continue; }
 
-        /* feed 240 B (120 samples) per 7.5 ms tick */
-        uint8_t chunk[240];
-        size_t chunk_len = 0;
-        if (leftover_len) {
-            size_t take = leftover_len > 240 ? 240 : leftover_len;
-            memcpy(chunk, leftover, take);
-            chunk_len = take;
-            memmove(leftover, leftover + take, leftover_len - take);
-            leftover_len -= take;
-        }
-        while (chunk_len < 240) {
-            cb_frame f;
+        /* refill the jitter buffer from the playback ring */
+        cb_frame f;
+        for (;;) {
             bool got;
             lock_take(s_out_lock);
-            got = cb_ring_pop(&s_out_ring, &f); /* underflow -> silence frame */
+            got = cb_ring_pop(&s_out_ring, &f); /* false + silence on empty */
             lock_give(s_out_lock);
-            size_t take = (240 - chunk_len) > CB_FRAME_BYTES ? CB_FRAME_BYTES : (240 - chunk_len);
-            memcpy(chunk + chunk_len, f.data, take);
-            chunk_len += take;
-            if (take < CB_FRAME_BYTES) {
-                memcpy(leftover, f.data + take, CB_FRAME_BYTES - take);
-                leftover_len = CB_FRAME_BYTES - take;
+            if (!got) break;
+            if (!jitter_push(&f)) {
+                /* jitter full: keep the newest data, drop the stale frame */
+                cb_frame drop;
+                jitter_pop(&drop);
+                jitter_push(&f);
             }
-            (void)pcm_avail; (void)pcm_in;
+        }
+
+        if (!s_j_primed && s_j_count >= JITTER_PRIME) s_j_primed = true;
+
+        /* feed exactly 240 B (120 samples) per 7.5 ms tick */
+        uint8_t chunk[240];
+        size_t chunk_len = 0;
+        while (chunk_len < 240) {
+            if (leftover_len) {
+                size_t take = leftover_len > 240 - chunk_len ? 240 - chunk_len : leftover_len;
+                memcpy(chunk + chunk_len, leftover, take);
+                chunk_len += take;
+                memmove(leftover, leftover + take, leftover_len - take);
+                leftover_len -= take;
+            } else if (s_j_primed && jitter_pop(&f)) {
+                memcpy(leftover, f.data, CB_FRAME_BYTES);
+                leftover_len = CB_FRAME_BYTES;
+            } else {
+                if (s_j_primed) s_j_primed = false; /* starved: re-prime */
+                memset(chunk + chunk_len, 0, 240 - chunk_len);
+                chunk_len = 240;
+            }
         }
 
         uint8_t msbc[64];
@@ -739,6 +783,7 @@ static void bridge_on_audio_up(esp_hf_sync_conn_hdl_t hdl)
     lock_take(s_in_lock);   cb_ring_init(&s_in_ring);  lock_give(s_in_lock);
     lock_take(s_out_lock);  cb_ring_init(&s_out_ring); lock_give(s_out_lock);
     s_asm_len = 0; s_tx_seq = 0; s_out_epoch = 0; s_capture_epoch = 0;
+    jitter_reset();
     s_turn_pending = false; s_speech_frames = s_silence_frames = s_collected = 0;
 
     if (local_hfp_test_enabled()) {
