@@ -203,3 +203,32 @@ Server for testing: worktree at the PR #8 merge, user unit `callbox-good`,
 same env vars as above. The debug PCM dump trick (env-gated write of
 committed turns to /tmp) proved invaluable for content diagnosis; keep it in
 mind, keep it out of commits.
+
+## Session addendum (2026-09-26, later): binary downlink shipped, RF wall measured
+
+Downlink batching (CBB1) negotiated via hello["downlink"]=="binary" is
+implemented both sides with a backward-compatible JSON fallback, paced
+sending (first two batches un-paced to prime the device jitter, then 0.92x
+real time), and incremental device-side reassembly. Critical heap lesson:
+BT+WiFi coexistence leaves ~5 KB free heap; any multi-KB static added to the
+audio path breaks Bluedroid's HFP malloc at phone connect (malloc failed
+size=4112, largest_block=960 observed). Size every buffer against that budget.
+
+Downlink intelligibility on the S25+ESP32 rig remains ~10% (laggy, 90% word
+loss) even with binary batches + 20-frame jitter. Combined with the earlier
+8.4 fps echo measurement and today's local_tone bisect conclusion on the
+hardware-lab branch ("Bluetooth is healthy, Wi-Fi is not"), the wall is RF:
+the shared 2.4 GHz radio starves Wi-Fi while eSCO reserved slots run.
+Buffering cannot fix slot starvation. Candidate next levers, in order of
+promise:
+1. local_tone bisect follow-up: measure pure Wi-Fi throughput during an
+   active SCO call (iperf3 from the device) to quantify the ceiling.
+2. UDP downlink probe: datagrams avoid TCP head-of-line blocking during
+   stalls; still bounded by radio slots, but recovers faster after each.
+3. Move the live demo to telephony/ (Asterisk SIP lab): PC-side audio has no
+   ESP32 radio constraint and exercises the same gateway/agent stack.
+4. Hardware revision only if 1-2 prove the arbitration is the limit.
+
+Serial measurement caveat: the CH340 stale-buffer glitch (48 MB/min of one
+repeated line) returned during this session; verify STATS via a fresh
+capture or trust server-side counters instead.
