@@ -5,6 +5,7 @@ import base64
 import binascii
 import io
 import math
+import struct
 import sys
 import struct
 import wave
@@ -65,7 +66,7 @@ def unpack_audio_batch(payload: bytes):
     if not isinstance(payload, (bytes, bytearray)) or len(payload) < AUDIO_BATCH_HEADER.size:
         raise AppError(422, 'audio_batch', 'Invalid binary audio batch.')
     magic, count, flags, frame_bytes, first_seq, epoch = AUDIO_BATCH_HEADER.unpack_from(payload)
-    if magic != AUDIO_BATCH_MAGIC or flags != 0 or frame_bytes != FRAME_BYTES:
+    if magic not in (AUDIO_BATCH_MAGIC, DOWNLINK_BATCH_MAGIC) or flags != 0 or frame_bytes != FRAME_BYTES:
         raise AppError(422, 'audio_batch', 'Unsupported binary audio batch format.')
     if not 1 <= count <= MAX_AUDIO_BATCH_FRAMES or first_seq > 2**31 - 1:
         raise AppError(422, 'audio_batch', 'Invalid binary audio batch metadata.')
@@ -201,3 +202,20 @@ class AudioBuffer:
     def interrupt(self):
         self.data.clear(); self.epoch += 1
         return self.epoch
+
+# Downlink binary batches (server -> device). Same wire discipline as the
+# uplink CBA1 codec but a distinct magic so a device can never confuse
+# directions. Header: >4sBBHII = magic, count, flags, frame_bytes,
+# first_seq, epoch. Flags reserved, must be 0.
+DOWNLINK_BATCH_MAGIC = b'CBB1'
+DOWNLINK_BATCH_HEADER = struct.Struct('>4sBBHII')
+DOWNLINK_BATCH_FRAMES = 6  # ~120 ms of audio per WebSocket message (heap-friendly for no-PSRAM BT+WiFi)
+
+def pack_audio_batch(frames, first_seq, epoch=0, magic=DOWNLINK_BATCH_MAGIC):
+    if not 1 <= len(frames) <= DOWNLINK_BATCH_FRAMES:
+        raise ValueError('invalid downlink batch size')
+    for f in frames:
+        if len(f) != FRAME_BYTES: raise ValueError('invalid frame size in batch')
+    header = DOWNLINK_BATCH_HEADER.pack(
+        magic, len(frames), 0, FRAME_BYTES, first_seq, epoch)
+    return header + b''.join(frames)

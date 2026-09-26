@@ -123,8 +123,57 @@ static int16_t frame_rms_dbish(const uint8_t *pcm)
 #define CTRL_RXQ_LEN 12
 typedef struct { uint8_t *data; size_t len; } rx_msg;
 static QueueHandle_t s_rxq, s_ctrl_rxq;
-static uint8_t s_accum[8192];
+static uint8_t s_accum[4096];
 static size_t s_accum_len;
+static uint8_t s_accum_opcode;
+static uint32_t s_dl_frames, s_dl_bad, s_dl_stale;
+
+/* Incremental downlink reassembly: frames are pushed to the playback ring as
+ * soon as their 640 bytes are complete — the full batch is never buffered
+ * (free heap on a no-PSRAM board running BT+Wi-Fi is ~5 KB; a 6 KB batch
+ * buffer was the straw that broke Bluedroid's HFP malloc at connect). */
+static uint8_t s_bin_hdr[16];
+static size_t s_bin_hdr_len;
+static uint8_t s_bin_frame[CB_FRAME_BYTES];
+static size_t s_bin_got;
+static uint32_t s_bin_count, s_bin_epoch, s_bin_idx;
+
+/* Incremental CBB1 downlink consumer. Returns true when the byte belongs to
+ * a batch that is still being consumed; false starts a fresh header. */
+static void handle_downlink_bytes(const uint8_t *buf, size_t len)
+{
+    while (len) {
+        if (s_bin_hdr_len < 16) {
+            size_t take = 16 - s_bin_hdr_len > len ? len : 16 - s_bin_hdr_len;
+            memcpy(s_bin_hdr + s_bin_hdr_len, buf, take);
+            s_bin_hdr_len += take; buf += take; len -= take;
+            if (s_bin_hdr_len < 16) return;
+            if (memcmp(s_bin_hdr, "CBB1", 4) != 0 || s_bin_hdr[5] != 0) {
+                s_dl_bad++; s_bin_hdr_len = 0; return; /* resync: drop rest */
+            }
+            uint16_t frame_bytes = (uint16_t)((s_bin_hdr[6] << 8) | s_bin_hdr[7]);
+            s_bin_count = ((uint32_t)s_bin_hdr[4]);
+            s_bin_epoch = ((uint32_t)s_bin_hdr[12] << 24) | ((uint32_t)s_bin_hdr[13] << 16)
+                        | ((uint32_t)s_bin_hdr[14] << 8) | s_bin_hdr[15];
+            if (frame_bytes != CB_FRAME_BYTES || s_bin_count == 0 || s_bin_count > 6) {
+                s_dl_bad++; s_bin_hdr_len = 0; return;
+            }
+            if (s_bin_epoch != s_out_epoch) { s_dl_stale++; s_bin_hdr_len = 0; return; }
+            s_bin_idx = 0; s_bin_got = 0;
+        }
+        size_t need = CB_FRAME_BYTES - s_bin_got;
+        size_t take = need > len ? len : need;
+        memcpy(s_bin_frame + s_bin_got, buf, take);
+        s_bin_got += take; buf += take; len -= take;
+        if (s_bin_got == CB_FRAME_BYTES) {
+            lock_take(s_out_lock);
+            cb_ring_push(&s_out_ring, s_bin_frame, CB_FRAME_BYTES, 0, s_bin_epoch);
+            lock_give(s_out_lock);
+            s_dl_frames++; s_bin_got = 0;
+            if (++s_bin_idx == s_bin_count) { s_bin_hdr_len = 0; return; }
+        }
+    }
+}
 static uint32_t s_rxq_drop, s_ctrl_rxq_drop, s_rx_alloc_fail;
 
 /* Binary PCM batch protocol shared with callbox.audio:
@@ -399,12 +448,14 @@ static void stats_task(void *arg)
         ESP_LOGI(TAG, "STATS msbc_fail=%" PRIu32 " net_send_drop=%" PRIu32
                  " rxq_drop=%" PRIu32 " ctrl_drop=%" PRIu32 " rx_alloc_fail=%" PRIu32
                  " in(drop=%llu,under=%llu,high=%u) out(drop=%llu,under=%llu,high=%u) tx_seq=%" PRIu32
+                 " dl(frames=%" PRIu32 ",bad=%" PRIu32 ",stale=%" PRIu32 ")"
                  " rms_max=%d/thr=%d",
                  s_msbc_decode_fail, s_net_send_drop, s_rxq_drop, s_ctrl_rxq_drop, s_rx_alloc_fail,
                  (unsigned long long)in_dropped, (unsigned long long)in_under,
                  (unsigned)s_in_ring.high_water,
                  (unsigned long long)out_dropped, (unsigned long long)out_under,
                  (unsigned)s_out_ring.high_water, s_tx_seq,
+                 s_dl_frames, s_dl_bad, s_dl_stale,
                  (int)s_rms_max, (int)CONFIG_CB_VAD_THRESHOLD);
         s_rms_max = 0;
     }
@@ -511,8 +562,8 @@ static void out_timer_cb(void *arg)
  * (BT/Wi-Fi coexistence), so frames arrive in bursts. Stage ~300 ms before
  * starting playout; re-prime after a starvation gap instead of emitting
  * choppy fragments. Static allocation: no heap work in the audio path. */
-#define JITTER_FRAMES 24
-#define JITTER_PRIME 14
+#define JITTER_FRAMES 20
+#define JITTER_PRIME 12
 static cb_frame s_jitter[JITTER_FRAMES];
 static size_t s_j_head, s_j_count;
 static bool s_j_primed;
@@ -620,6 +671,10 @@ static void ws_event_handler(void *handler_args, esp_event_base_t base,
         cJSON_AddStringToObject(o, "protocol", "callbox.v1");
         cJSON_AddStringToObject(o, "device_id", CONFIG_CB_DEVICE_ID);
         cJSON_AddStringToObject(o, "token", CONFIG_CB_DEVICE_TOKEN);
+        /* Negotiate binary TTS downlink (CBB1 batches): 10x fewer messages and
+         * ~30% fewer bytes than per-frame JSON — SCO/Wi-Fi coexistence needs
+         * the radio airtime. Server falls back to JSON for old devices. */
+        cJSON_AddStringToObject(o, "downlink", "binary");
         char *str = cJSON_PrintUnformatted(o);
         if (str) { send_text(str); cJSON_free(str); }
         cJSON_Delete(o);
@@ -627,13 +682,16 @@ static void ws_event_handler(void *handler_args, esp_event_base_t base,
         break;
     }
     case WEBSOCKET_EVENT_DATA:
-        if (e->data_len <= 0 || e->op_code != 0x1) break;
-        if (e->payload_offset == 0) s_accum_len = 0;
+        if (e->data_len <= 0 || (e->op_code != 0x1 && e->op_code != 0x2)) break;
+        if (e->payload_offset == 0) { s_accum_len = 0; s_accum_opcode = (uint8_t)e->op_code; }
         if (s_accum_len + e->data_len <= sizeof(s_accum)) {
             memcpy(s_accum + s_accum_len, e->data_ptr, e->data_len);
             s_accum_len += e->data_len;
         }
         if (e->payload_offset + e->data_len >= e->payload_len && s_accum_len > 0) {
+            if (s_accum_opcode == 0x2) {
+                handle_downlink_bytes(s_accum, s_accum_len);
+            } else {
             rx_msg m = { .data = malloc(s_accum_len + 1), .len = s_accum_len };
             if (m.data) {
                 memcpy(m.data, s_accum, s_accum_len);
@@ -648,6 +706,7 @@ static void ws_event_handler(void *handler_args, esp_event_base_t base,
                 }
             } else {
                 s_rx_alloc_fail++;
+            }
             }
             s_accum_len = 0;
         }
@@ -1028,7 +1087,7 @@ void app_main(void)
 
     const esp_websocket_client_config_t ws_cfg = {
         .uri = CONFIG_CB_SERVER_URI,
-        .buffer_size = 4096,
+        .buffer_size = 5120,
         .network_timeout_ms = 10000,
     };
     s_ws = esp_websocket_client_init(&ws_cfg);

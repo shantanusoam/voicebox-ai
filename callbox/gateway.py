@@ -8,7 +8,8 @@ import hashlib
 import re
 import time
 from fastapi import WebSocket, WebSocketDisconnect
-from .audio import AudioBuffer, FRAME_BYTES, SAMPLE_RATE, to_wav, resample_async, unpack_audio_batch
+from .audio import (AudioBuffer, FRAME_BYTES, SAMPLE_RATE, to_wav, resample_async,
+    unpack_audio_batch, pack_audio_batch, DOWNLINK_BATCH_FRAMES, DOWNLINK_BATCH_MAGIC)
 from .errors import AppError
 
 
@@ -82,12 +83,27 @@ class Gateway:
                 await send({'type':'turn.result','call_id':call_id,'epoch':epoch, **result})
                 wav = await self.provider.speak(result['reply'], wav=True)
                 output = await resample_async(wav)
-                for index, start in enumerate(range(0, len(output), FRAME_BYTES)):
-                    if buffer.epoch != epoch: return
-                    frame = output[start:start+FRAME_BYTES].ljust(FRAME_BYTES, b'\0')
-                    await send({'type':'audio.output','call_id':call_id,'epoch':epoch,'seq':index,
-                                'sample_rate':SAMPLE_RATE,'pcm16':base64.b64encode(frame).decode()})
-                    await asyncio.sleep(.02)
+                if binary_downlink:
+                    frames = [output[i:i+FRAME_BYTES].ljust(FRAME_BYTES, b'\0')
+                              for i in range(0, len(output), FRAME_BYTES)]
+                    step = DOWNLINK_BATCH_FRAMES
+                    for index in range(0, len(frames), step):
+                        if buffer.epoch != epoch: return
+                        chunk = frames[index:index+step]
+                        await ws.send_bytes(pack_audio_batch(
+                            chunk, index, epoch, DOWNLINK_BATCH_MAGIC))
+                        # Prime the device's jitter buffer fast (first two
+                        # batches un-paced), then pace just under real time so
+                        # the buffer keeps a cushion against radio hiccups.
+                        if index >= 2 * step:
+                            await asyncio.sleep(step * 0.02 * 0.92)
+                else:
+                    for index, start in enumerate(range(0, len(output), FRAME_BYTES)):
+                        if buffer.epoch != epoch: return
+                        frame = output[start:start+FRAME_BYTES].ljust(FRAME_BYTES, b'\0')
+                        await send({'type':'audio.output','call_id':call_id,'epoch':epoch,'seq':index,
+                                    'sample_rate':SAMPLE_RATE,'pcm16':base64.b64encode(frame).decode()})
+                        await asyncio.sleep(.02)
                 await send({'type':'turn.done','call_id':call_id,'epoch':epoch})
             except AppError as error:
                 await fail(error)
@@ -120,6 +136,12 @@ class Gateway:
                 with contextlib.suppress(Exception):
                     await stale.close(1012, 'Replaced by a newer connection')
             self.connections[did] = ws; own_connection = True
+            # callbox.v1 downlink negotiation: a device that advertises
+            # "downlink":"binary" receives TTS as CBB1 binary batches instead
+            # of one JSON audio.output per frame. Cuts per-frame overhead ~30%
+            # and messages 10x — SCO/Wi-Fi coexistence on the ESP32 needs the
+            # airtime more than it needs JSON debuggability.
+            binary_downlink = hello.get('downlink') == 'binary'
             self.db.touch_device(did)
             self.db.event(workspace, 'device.connected', 'Lab gateway connected')
             await send({'type':'ready','protocol':'callbox.v1','device_id':did,'sample_rate':SAMPLE_RATE,
