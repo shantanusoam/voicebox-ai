@@ -249,3 +249,61 @@ and adds negotiated CBB2/IMA ADPCM (164 bytes per 20 ms) for a 4x smaller
 downlink. Host tests and the gateway eval do not include SCO+Wi-Fi RF. First
 flash and compare CBB1 vs CBB2 on the S25, then measure packet arrivals and
 RF throughput before declaring a hardware limit or moving to UDP.
+
+## PR #9 hardware validation (2026-09-26): A/B campaign results
+
+Hardware validation of fix/esp32-downlink-playback (commit 2dc0be3), per the
+PR's own gate. Server: worktree at 2dc0be3 (SHA
+2dc0be3549c72b23ab8bf303db226919ba97a746), firmware: same commit, built with
+ESP-IDF v5.5.5 (build clean, 0x148090 bytes, 57% app partition free) and
+flashed at 115200 baud. `python scripts/verify.py`: ALL GATES PASSED (69/69
+checks incl. the new queue/ADPCM parity tests) on this machine before
+flashing.
+
+### Environment traps that cost the first two "failures" (not code bugs)
+1. Port 8787 was still held by the previous session's server unit — the PR
+   firmware talked to the OLD gateway for two calls. Kill stale units before
+   blaming code. The PR server must be the process bound to 8787.
+2. The PR worktree starts with a FRESH .runtime DB — the lab device
+   (dev_95741eee…) is not registered in it, so hello was rejected as invalid
+   credentials and the call had no server at all. Copy the lab DB into the
+   worktree before testing.
+3. The PC had roamed to Excitel_161095441_5 (5 GHz) while the ESP32 is on
+   the 2.4 GHz SSID; the router isolates the bands. Symptom: WS
+   ESP_ERR_ESP_TLS_CONNECT from the device, phone-browser probe to the
+   server also fails. Fix: keep the PC on the 2.4 GHz SSID. The ESP32 radio
+   is 2.4 GHz only.
+
+### Campaign (held constant: S25, 2.4 GHz AP, ~2 m distance, server host, spoken sample)
+| Arm | Calls | Result |
+|---|---|---|
+| local_tone (isolation gate) | 1 | Continuous single-frequency tone on the caller end for the whole call. LOCAL_HFP sent=4127 drop=0 bad=0. Bluetooth mSBC playout exonerated. |
+| echo + binary | 1 | No usable voice. Echo couples downlink 1:1 to uplink; round-trip through the coexistence-choked link collapses both (tx_seq advanced ~1.3 fps while the input ring dropped ~90 fps of capture). Echo collapse is an artifact of 1:1 coupling, not of the codec or the queue. |
+| agent + binary | 1 | Reply audible with dropouts; WS died mid-call (server-side websockets drain AssertionError during TTS push). |
+| agent + adpcm (CBB2) | 3 + 1 instrumented | Call 1: mostly clear, phrase-level drops (caller transcribed ~75% of the reply text). Call 2: no reply — caller hung up 300 ms after the last speech spike, before the 800 ms trailing-silence commit window closed (hang-up race, not a codec failure). Call 3 + instrumented: reply heard. |
+
+### Instrumented agent+adpcm playback (STATS/HEAP during TTS)
+- `dl(frames=752, bad=0, stale=0)` — 15 s of TTS delivered with zero bad or
+  stale blocks.
+- `out(drop=2, under=13, high=20, queued=3..6)` — **98% frame delivery**
+  during playback; the residual choppiness is the 13 stall gaps.
+- `HEAP free=33.5 KB largest=26.6 KB` during playback (22.6 KB during the
+  longer turn) — comfortable, no allocation failures, BT pairing unaffected.
+- First-audio delay: TURN_PROCESSING → first audio ≈ TTS generation (~4-5 s,
+  OpenAI gpt-4o-mini-tts) + ~0.4 s jitter prime (first two batches un-paced).
+  Provider thinking time and playback prime are separate terms.
+- Residual uplink capture loss (in drop=78..196 per turn) degrades STT
+  transcripts slightly but every instrumented turn transcribed and ran.
+
+### Verdict
+The PR's locked playback queue + CBB2 ADPCM downlink turns a ~10%-intelligible
+path into a working one: intelligible replies, 98% frame delivery, healthy
+heap, no mid-call disconnects in the final arm. Remaining word loss (~2% of
+frames + phrase gaps under multi-second radio stalls) is bounded by SCO/Wi-Fi
+coexistence on the shared radio, now measured directly rather than inferred.
+The remaining levers (UDP downlink probe, SIP/Asterisk demo path) are tracked
+in the earlier addendum. No claim of "no lag" is made: dropouts remain audible
+under radio stalls.
+
+Verified: firmware build + all software gates at commit 2dc0be3 on this
+machine; physical call results as above. The PR stays open for review.

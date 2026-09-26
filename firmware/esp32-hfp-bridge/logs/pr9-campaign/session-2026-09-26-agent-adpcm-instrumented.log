@@ -1,0 +1,269 @@
+I (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbox: COMMIT_QUEUEI (727304) callbafter 104 frames
+I (727444) callbox: COMMIT_SENT turn-00000013
+I (727474) callbox: TURN_PROCESSING
+I (728714) callbox: SCO PKTS rx(total=16811,ok=15815,err=0,none=996,lost=0) tx(total=16814,discard=0)
+I (728714) callbox: STATS msbc_fail=0 net_send_drop=0 rxq_drop=0 ctrl_drop=0 rx_alloc_fail=0 in(drop=170,under=2370329,high=8) out(drop=35,under=23,high=20,queued=0) tx_seq=174 dl(frames=1285,bad=0,stale=0) rms_max=22594/thr=120
+I (728734) callbox: HEAP free=33464 largest=26624
+I (733734) callbox: SCO PKTS rx(total=17480,ok=16440,err=0,none=1040,lost=0) tx(total=17483,discard=0)
+I (733734) callbox: STATS msbc_fail=0 net_send_drop=0 rxq_drop=0 ctrl_drop=0 rx_alloc_fail=0 in(drop=170,under=2543858,high=8) out(drop=35,under=23,high=20,queued=0) tx_seq=174 dl(frames=1285,bad=0,stale=0) rms_max=0/thr=120
+I (733754) callbox: HEAP free=32116 largest=26624
+E (737564) callbox: SERVER_ERROR code=provider_timeout msg=Provider timed out. Check the transcript before retrying any action.
+I (737564) callbox: TURN_DONE
+I (738754) callbox: SCO PKTS rx(total=18149,ok=17072,err=0,none=1077,lost=0) tx(total=18152,discard=0)
+I (738754) callbox: STATS msbc_fail=0 net_send_drop=0 rxq_drop=0 ctrl_drop=0 rx_alloc_fail=0 in(drop=210,under=2676799,high=8) out(drop=35,under=23,high=20,queued=0) tx_seq=180 dl(frames=1285,bad=0,stale=0) rms_max=0/thr=120
+I (738774) callbox: HEAP free=28772 largest=24576
+I (743774) callbox: SCO PKTS rx(total=18819,ok=17702,err=0,none=1117,lost=0) tx(total=18821,discard=0)
+I (743774) callbox: STATS msbc_fail=0 net_send_drop=0 rxq_drop=0 ctrl_drop=0 rx_alloc_fail=0 in(drop=263,under=2739011,high=8) out(drop=35,under=23,high=20,queued=0) tx_seq=362 dl(frames=1285,bad=0,stale=0) rms_max=0/thr=120
+I (743794) callbox: HEAP free=25556 largest=21504
+I (748794) callbox: STATS msbc_fail=0 net_send_drop=0 rxq_drop=0 ctrl_drop=0 rx_alloc_fail=0 in(drop=362,under=2762172,high=8) out(drop=35,under=23,high=20,queued=0) tx_seq=501 dl(frames=1285,bad=0,stale=0) rms_max=0/thr=120
+I (748794) callbox: SCO PKTS rx(total=19488,ok=18322,err=0,none=1166,lost=0) tx(total=19491,discard=0)
+I (748794) callbox: HEAP free=28480 largest=26624
+I (753814) callbox: SCO PKTS rx(total=20157,ok=18952,err=0,none=1205,lost=0) tx(total=20160,discard=0)
+I (753814) callbox: STATS msbc_fail=0 net_send_drop=0 rxq_drop=0 ctrl_drop=0 rx_alloc_fail=0 in(drop=494,under=2763763,high=8) out(drop=35,under=23,high=20,queued=0) tx_seq=609 dl(frames=1285,bad=0,stale=0) rms_max=0/thr=120
+I (753834) callbox: HEAP free=22624 largest=19456
+I (754354) callbox: speech detected (rms 603)
+W (754624) BT_HCI: hcif disc complete: hdl 0x180, rsn 0x13 dev_find 1
+W (754624) BT_APPL: bta_hf_client_sco_data_send: SCO not open
+I (754624) callbox: HF audio state 0 preferred_frame_size=0
+W (754624) callbox: BT AUDIO DOWN — call.end queued
+I (754714) callbox: CALL_ENDED (server)
+I (758324) callbox: call setup 1
+I (758554) callbox: HF audio state 3 preferred_frame_size=57
+I (758564) callbox: BT AUDIO UP (mSBC) — call.start queued
+I (758674) callbox: CALL_STARTED id=call_bd9197ddf24d41adbb
+I (758844) callbox: SCO PKTS rx(total=35,ok=33,err=0,none=2,lost=0) tx(total=37,discard=0)
+I (758844) callbox: STATS msbc_fail=0 net_send_drop=0 rxq_drop=0 ctrl_drop=0 rx_alloc_fail=0 in(drop=0,under=8718,high=1) out(drop=0,under=0,high=0,queued=0) tx_seq=6 dl(frames=0,bad=0,stale=0) rms_max=856/thr=120
+I (758864) callbox: HEAP free=32104 largest=26624
+I (759854) callbox: call setup 0
+I (763864) callbox: STATS msbc_fail=0 net_send_drop=0 rxq_drop=0 ctrl_drop=0 rx_alloc_fail=0 in(drop=7,under=151849,high=8) out(drop=0,under=0,high=0,queued=0) tx_seq=223 dl(frames=0,bad=0,stale=0) rms_max=15/thr=120
+I (763864) callbox: SCO PKTS rx(total=704,ok=647,err=0,none=57,lost=0) tx(total=706,discard=0)
+I (763864) callbox: HEAP free=28684 largest=24576
+I (765744) callbox: speech detected (rms 2431)
+I (766914) callbox: COMMIT_QUEUED turn-00000014 after 57 frames
+I (768884) callbox: SCO PKTS rx(total=1374,ok=1279,err=0,none=95,lost=0) tx(total=1375,discard=0)
+I (768884) callbox: STATS msbc_fail=0 net_send_drop=0 rxq_drop=0 ctrl_drop=0 rx_alloc_fail=0 in(drop=78,under=194929,high=8) out(drop=0,under=0,high=0,queued=0) tx_seq=295 dl(frames=0,bad=0,stale=0) rms_max=11898/thr=120
+I (768894) callbox: HEAP free=28600 largest=24576
+W (769284) BT_HCI: hci cmd send: sniff: hdl 0x80, intv(400 800)
+W (769284) BT_HCI: hcif mode change: hdl 0x80, mode 0, intv 0, status 0x20
+E (769284) BT_APPL: bta_dm_pm_btm_status hci_status=32
+I (770314) callbox: COMMIT_SENT turn-00000014
+I (770384) callbox: TURN_PROCESSING
+I (772914) callbox: TURN_RESULT: (none)
+I (773904) callbox: STATS msbc_fail=0 net_send_drop=0 rxq_drop=0 ctrl_drop=0 rx_alloc_fail=0 in(drop=78,under=311471,high=8) out(drop=0,under=0,high=0,queued=0) tx_seq=306 dl(frames=0,bad=0,stale=0) rms_max=0/thr=120
+I (773904) callbox: SCO PKTS rx(total=2043,ok=1904,err=0,none=139,lost=0) tx(total=2045,discard=0)
+I (773904) callbox: HEAP free=31700 largest=26624
+I (778924) callbox: SCO PKTS rx(total=2712,ok=2538,err=0,none=174,lost=0) tx(total=2714,discard=0)
+I (778924) callbox: STATS msbc_fail=0 net_send_drop=0 rxq_drop=0 ctrl_drop=0 rx_alloc_fail=0 in(drop=78,under=473133,high=8) out(drop=0,under=3,high=12,queued=0) tx_seq=306 dl(frames=126,bad=0,stale=0) rms_max=0/thr=120
+I (778944) callbox: HEAP free=30316 largest=26624
+I (783944) callbox: STATS msbc_fail=0 net_send_drop=0 rxq_drop=0 ctrl_drop=0 rx_alloc_fail=0 in(drop=78,under=615200,high=8) out(drop=2,under=5,high=20,queued=7) tx_seq=306 dl(frames=352,bad=0,stale=0) rms_max=0/thr=120
+I (783944) callbox: SCO PKTS rx(total=3382,ok=3165,err=0,none=217,lost=0) tx(total=3383,discard=0)
+I (783954) callbox: HEAP free=35200 largest=26624
+I (787474) callbox: TURN_DONE
+I (788964) callbox: STATS msbc_fail=0 net_send_drop=0 rxq_drop=0 ctrl_drop=0 rx_alloc_fail=0 in(drop=89,under=739653,high=8) out(drop=2,under=9,high=20,queued=0) tx_seq=355 dl(frames=506,bad=0,stale=0) rms_max=0/thr=120
+I (788964) callbox: HEAP free=28544 largest=22528
+I (788974) callbox: SCO PKTS rx(total=4051,ok=3797,err=0,none=254,lost=0) tx(total=4052,discard=0)
+I (791044) callbox: speech detected (rms 8615)
+I (793974) callbox: SCO PKTS rx(total=4719,ok=4420,err=0,none=299,lost=0) tx(total=4721,discard=0)
+I (793984) callbox: STATS msbc_fail=0 net_send_drop=0 rxq_drop=0 ctrl_drop=0 rx_alloc_fail=0 in(drop=185,under=780010,high=8) out(drop=2,under=9,high=20,queued=0) tx_seq=504 dl(frames=506,bad=0,stale=0) rms_max=21563/thr=120
+I (793994) callbox: HEAP free=33680 largest=21504
+I (795504) callbox: COMMIT_QUEUED turn-00000015 after 208 frames
+I (795934) callbox: COMMIT_SENT turn-00000015
+I (796054) callbox: TURN_PROCESSING
+I (798734) callbox: TURN_RESULT: (none)
+I (799004) callbox: SCO PKTS rx(total=5390,ok=5048,err=0,none=342,lost=0) tx(total=5392,discard=0)
+I (799014) callbox: STATS msbc_fail=0 net_send_drop=0 rxq_drop=0 ctrl_drop=0 rx_alloc_fail=0 in(drop=196,under=906908,high=8) out(drop=2,under=9,high=20,queued=0) tx_seq=565 dl(frames=506,bad=0,stale=0) rms_max=820/thr=120
+I (799024) callbox: HEAP free=33476 largest=26624
+I (804034) callbox: SCO PKTS rx(total=6060,ok=5648,err=0,none=412,lost=0) tx(total=6062,discard=0)
+I (804034) callbox: STATS msbc_fail=0 net_send_drop=0 rxq_drop=0 ctrl_drop=0 rx_alloc_fail=0 in(drop=196,under=1065144,high=8) out(drop=2,under=9,high=20,queued=3) tx_seq=565 dl(frames=530,bad=0,stale=0) rms_max=0/thr=120
+I (804064) callbox: HEAP free=35236 largest=26624
+I (809064) callbox: SCO PKTS rx(total=6731,ok=6274,err=0,none=457,lost=0) tx(total=6733,discard=0)
+I (809064) callbox: STATS msbc_fail=0 net_send_drop=0 rxq_drop=0 ctrl_drop=0 rx_alloc_fail=0 in(drop=196,under=1221888,high=8) out(drop=2,under=13,high=20,queued=6) tx_seq=565 dl(frames=752,bad=0,stale=0) rms_max=0/thr=120
+I (809084) callbox: HEAP free=33676 largest=26624
+I (814094) callbox: SCO PKTS rx(total=7402,ok=6897,err=0,none=505,lost=0) tx(total=7404,discard=0)
+I (814094) callbox: STATS msbc_fail=0 net_send_drop=0 rxq_drop=0 ctrl_drop=0 rx_alloc_fail=0 in(drop=196,under=1375577,high=8) out(drop=2,under=17,high=20,queued=6) tx_seq=565 dl(frames=944,bad=0,stale=0) rms_max=0/thr=120
+I (814114) callbox: HEAP free=30260 largest=26624
+I (818204) callbox: TURN_DONE
+I (819114) callbox: STATS msbc_fail=0 net_send_drop=0 rxq_drop=0 ctrl_drop=0 rx_alloc_fail=0 in(drop=209,under=1510779,high=8) out(drop=38,under=20,high=20,queued=10) tx_seq=583 dl(frames=1098,bad=0,stale=0) rms_max=0/thr=120
+I (819114) callbox: SCO PKTS rx(total=8071,ok=7528,err=0,none=543,lost=0) tx(total=8073,discard=0)
+I (819124) callbox: HEAP free=25360 largest=17408
+I (824134) callbox: SCO PKTS rx(total=8740,ok=8157,err=0,none=583,lost=0) tx(total=8742,discard=0)
+I (824134) callbox: STATS msbc_fail=0 net_send_drop=0 rxq_drop=0 ctrl_drop=0 rx_alloc_fail=0 in(drop=394,under=1528502,high=8) out(drop=38,under=20,high=20,queued=10) tx_seq=645 dl(frames=1098,bad=0,stale=0) rms_max=0/thr=120
+I (824154) callbox: HEAP free=27208 largest=22528
+I (829154) callbox: SCO PKTS rx(total=9410,ok=8788,err=0,none=622,lost=0) tx(total=9411,discard=0)
+I (829154) callbox: STATS msbc_fail=0 net_send_drop=0 rxq_drop=0 ctrl_drop=0 rx_alloc_fail=0 in(drop=530,under=1572492,high=8) out(drop=38,under=20,high=20,queued=10) tx_seq=736 dl(frames=1098,bad=0,stale=0) rms_max=0/thr=120
+I (829174) callbox: HEAP free=28840 largest=24576
+I (834174) callbox: STATS msbc_fail=0 net_send_drop=0 rxq_drop=0 ctrl_drop=0 rx_alloc_fail=0 in(drop=668,under=1626439,high=8) out(drop=38,under=20,high=20,queued=10) tx_seq=834 dl(frames=1098,bad=0,stale=0) rms_max=0/thr=120
+I (834174) callbox: SCO PKTS rx(total=10079,ok=9420,err=0,none=659,lost=0) tx(total=10081,discard=0)
+I (834184) callbox: HEAP free=30372 largest=26624
+I (839194) callbox: SCO PKTS rx(total=10748,ok=10043,err=0,none=705,lost=0) tx(total=10750,discard=0)
+I (839194) callbox: STATS msbc_fail=0 net_send_drop=0 rxq_drop=0 ctrl_drop=0 rx_alloc_fail=0 in(drop=738,under=1721213,high=8) out(drop=38,under=20,high=20,queued=10) tx_seq=1009 dl(frames=1098,bad=0,stale=0) rms_max=0/thr=120
+I (839214) callbox: HEAP free=32104 largest=26624
+I (844214) callbox: STATS msbc_fail=0 net_send_drop=0 rxq_drop=0 ctrl_drop=0 rx_alloc_fail=0 in(drop=753,under=1833785,high=8) out(drop=38,under=20,high=20,queued=10) tx_seq=1216 dl(frames=1098,bad=0,stale=0) rms_max=0/thr=120
+I (844214) callbox: SCO PKTS rx(total=11418,ok=10661,err=0,none=757,lost=0) tx(total=11419,discard=0)
+I (844224) callbox: HEAP free=28484 largest=24576
+E (848064) callbox: SERVER_ERROR code=audio_buffer_full msg=Commit or interrupt before the 15-second turn limit.
+E (848134) callbox: SERVER_ERROR code=audio_buffer_full msg=Commit or interrupt before the 15-second turn limit.
+E (848204) callbox: SERVER_ERROR code=audio_buffer_full msg=Commit or interrupt before the 15-second turn limit.
+E (848254) callbox: SERVER_ERROR code=audio_buffer_full msg=Commit or interrupt before the 15-second turn limit.
+E (848274) callbox: SERVER_ERROR code=audio_buffer_full msg=Commit or interrupt before the 15-second turn limit.
+E (848364) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (848464) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (848514) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (848614) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (848694) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (848704) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (848714) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (848814) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (848824) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (848924) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+I (849234) callbox: STATS msbc_fail=0 net_send_drop=0 rxq_drop=0 ctrl_drop=0 rx_alloc_fail=0 in(drop=838,under=1878533,high=8) out(drop=38,under=20,high=20,queued=10) tx_seq=1362 dl(frames=1098,bad=0,stale=0) rms_max=0/thr=120
+I (849234) callbox: SCO PKTS rx(total=12087,ok=11284,err=0,none=803,lost=0) tx(total=12089,discard=0)
+I (849244) callbox: HEAP free=29492 largest=26624
+E (849344) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (849344) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (849354) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (849374) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (849384) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (849404) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (849474) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (849524) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (849644) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (849674) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (849764) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (849844) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (850054) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (850064) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (850264) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (850304) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (850304) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (850314) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (850364) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (850404) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (850524) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (850544) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+I (850574) callbox: speech detected (rms 1782)
+E (850724) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (850734) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (850754) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (850804) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (850834) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (851024) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (851034) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (851994) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (852004) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (852004) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (852004) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (852014) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (852054) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (852134) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (852134) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (852394) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (852394) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (852484) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (852494) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (852534) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (853124) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (853124) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (853134) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (853144) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (853194) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (853304) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (853324) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (853324) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (853354) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (853484) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (853504) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (853524) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (853624) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (853654) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (853724) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (853824) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (853884) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+I (854254) callbox: SCO PKTS rx(total=12756,ok=11914,err=0,none=842,lost=0) tx(total=12758,discard=0)
+I (854254) callbox: STATS msbc_fail=0 net_send_drop=0 rxq_drop=0 ctrl_drop=0 rx_alloc_fail=0 in(drop=878,under=1952982,high=8) out(drop=38,under=20,high=20,queued=10) tx_seq=1559 dl(frames=1098,bad=0,stale=0) rms_max=14722/thr=120
+I (854274) callbox: HEAP free=23648 largest=19456
+E (854324) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (854324) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (854334) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (854344) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (854344) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (854374) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (855394) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (855404) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (855414) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (855424) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (855424) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (855434) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (855454) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (855454) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (855474) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (855474) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (855574) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (855584) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (855614) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (855634) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (855764) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (855884) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (855894) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (855914) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+I (855984) callbox: COMMIT_QUEUED turn-00000016 after 256 frames
+E (855994) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (856004) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+I (856074) callbox: COMMIT_SENT turn-00000016
+E (856244) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+I (856244) callbox: TURN_PROCESSING
+I (859124) callbox: TURN_RESULT: (none)
+I (859284) callbox: SCO PKTS rx(total=13427,ok=12550,err=0,none=877,lost=0) tx(total=13429,discard=0)
+I (859284) callbox: STATS msbc_fail=0 net_send_drop=0 rxq_drop=0 ctrl_drop=0 rx_alloc_fail=0 in(drop=895,under=2084869,high=8) out(drop=38,under=20,high=20,queued=10) tx_seq=1636 dl(frames=1098,bad=0,stale=0) rms_max=3343/thr=120
+I (859304) callbox: HEAP free=34836 largest=26624
+I (864314) callbox: STATS msbc_fail=0 net_send_drop=0 rxq_drop=0 ctrl_drop=0 rx_alloc_fail=0 in(drop=895,under=2243757,high=8) out(drop=38,under=21,high=20,queued=19) tx_seq=1636 dl(frames=1176,bad=0,stale=0) rms_max=0/thr=120
+I (864314) callbox: SCO PKTS rx(total=14098,ok=13181,err=0,none=917,lost=0) tx(total=14100,discard=0)
+I (864324) callbox: HEAP free=34964 largest=26624
+I (869334) callbox: SCO PKTS rx(total=14767,ok=13808,err=0,none=959,lost=0) tx(total=14769,discard=0)
+I (869334) callbox: STATS msbc_fail=0 net_send_drop=0 rxq_drop=0 ctrl_drop=0 rx_alloc_fail=0 in(drop=895,under=2393491,high=8) out(drop=41,under=23,high=20,queued=6) tx_seq=1636 dl(frames=1389,bad=0,stale=0) rms_max=0/thr=120
+I (869354) callbox: HEAP free=32104 largest=26624
+I (874224) callbox: TURN_DONE
+E (874334) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+I (874354) callbox: SCO PKTS rx(total=15436,ok=14435,err=0,none=1001,lost=0) tx(total=15438,discard=0)
+I (874354) callbox: STATS msbc_fail=0 net_send_drop=0 rxq_drop=0 ctrl_drop=0 rx_alloc_fail=0 in(drop=895,under=2542377,high=8) out(drop=41,under=28,high=20,queued=6) tx_seq=1642 dl(frames=1598,bad=0,stale=0) rms_max=0/thr=120
+I (874384) callbox: HEAP free=30544 largest=26624
+E (874414) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (874504) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (874614) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (874644) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (874674) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (875824) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (875824) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (875824) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (875834) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (876274) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (876274) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (876284) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (876294) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (876294) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (876314) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (876464) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (876504) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (876514) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (876514) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+I (876514) callbox: speech detected (rms 603)
+E (876574) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (876584) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (876634) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (876694) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (876764) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+E (876814) callbox: SERVER_ERROR code=sequence msg=Audio sequence gap exceeds the recovery window.
+W (876814) BT_HCI: hcif disc complete: hdl 0x180, rsn 0x13 dev_find 1
+W (876814) BT_APPL: bta_hf_client_sco_data_send: SCO not open
+W (876824) BT_APPL: bta_hf_client_sco_data_send: SCO not open
+I (876824) callbox: HF audio state 0 preferred_frame_size=0
+W (876824) BT_APPL: bta_hf_client_sco_data_send: SCO not open
+W (876834) BT_APPL: bta_hf_client_sco_data_send: SCO not open
+W (876844) callbox: BT AUDIO DOWN — call.end queued
+I (878324) callbox: CALL_ENDED (server)
+W (883994) BT_HCI: hcif mode change: hdl 0x80, mode 2, intv 768, status 0x0
+W (888094) BT_HCI: hci cmd send: unsniff: hdl 0x80
+W (888564) BT_HCI: hcif mode change: hdl 0x80, mode 0, intv 0, status 0x0
+W (895664) BT_HCI: hcif mode change: hdl 0x80, mode 2, intv 768, status 0x0
+W (905364) BT_HCI: hci cmd send: unsniff: hdl 0x80
+W (905844) BT_HCI: hcif mode change: hdl 0x80, mode 0, intv 0, status 0x0
