@@ -70,6 +70,17 @@ def split_reply_sentences(text):
     """First sentence alone (fast first audio); later fragments grouped so the
     TTS call count stays proportional to reply length, not punctuation."""
     parts = [p.strip() for p in _SENTENCE_BOUNDARY.split((text or '').strip()) if p.strip()]
+    # Cap the first TTS fragment near 45 characters: TTS latency scales with
+    # clip length, and the first fragment gates the first word. Cut at the
+    # last comma inside the cap, else the last space.
+    if parts and len(parts[0]) > 50:
+        head = parts[0]
+        cut = head.rfind(',', 0, 50)
+        if cut < 20:
+            cut = head.rfind(' ', 0, 50)
+        if cut >= 20:
+            parts[0] = head[:cut].strip(' ,')
+            parts.insert(1, head[cut:].strip(' ,'))
     if len(parts) <= 1:
         return parts
     rest, group = [], []
@@ -139,8 +150,13 @@ class Gateway:
                     await send({'type':'turn.result','call_id':call_id,'epoch':epoch,**cached,'replayed':True})
                     await send({'type':'turn.done','call_id':call_id,'epoch':epoch})
                     return
+                _t0 = time.monotonic()
                 text = await self.provider.transcribe(to_wav(pcm), 'audio/wav')
+                _t1 = time.monotonic()
+                LOG.warning('turn-timing stt_ms=%d', int((_t1-_t0)*1000))
                 result = await self.agent.turn(workspace, call_id, text, request_id)
+                _t2 = time.monotonic()
+                LOG.warning('turn-timing llm_ms=%d', int((_t2-_t1)*1000))
                 self.db.cache(workspace,'ws-audio:'+call_id,request_id,payload,result)
                 if buffer.epoch != epoch: return
                 await send({'type':'turn.result','call_id':call_id,'epoch':epoch, **result})
@@ -153,8 +169,12 @@ class Gateway:
                     sentences = [result['reply'] or '']
                 for sentence_index, sentence in enumerate(sentences):
                     if buffer.epoch != epoch: return
+                    _ts = time.monotonic()
                     wav = await self.provider.speak(sentence, wav=True)
                     output = await resample_async(wav)
+                    LOG.warning('turn-timing tts_ms=%d sentence=%d len=%d since_start_ms=%d',
+                             int((time.monotonic()-_ts)*1000), sentence_index,
+                             len(output)//FRAME_BYTES*20, int((_ts-_t0)*1000))
                     if downlink_codec:
                         await send_paced_downlink(ws, output, epoch, lambda: buffer.epoch,
                                                   downlink_codec,

@@ -329,3 +329,29 @@ Remaining latency structure (measured separately): commit window ~0.8-1.8 s
 sentence TTS ~1-2 s = ~4-5 s to first word (was ~7-9 s), then real-time
 streaming. The next latency tier is the OpenAI Realtime path (~0.9 s), which
 needs a device-protocol bridge and is out of this PR's scope.
+
+### Measured first-word latency floor (agent+adpcm, instrumented)
+
+Per-stage timings from the gateway (turn-timing log lines):
+- stt 1.07-1.29 s, llm 0.99-2.47 s, tts(first fragment) 2.2-3.6 s.
+- OpenAI TTS latency does NOT scale with clip length (2.48 s for a 76-char
+  clip vs 2.16 s for tts-1; 2.6-3.6 s observed for 4-8 s clips). First-word
+  = commit window (0.8-1.8 s) + stt + llm + tts + ~0.4 s prime
+  = ~6.5-9.5 s. Caller-perceived: "still 9 s" — matches measurement.
+- Sentence streaming removed the TAIL latency (no full-clip wait; later
+  sentences generate during playback) but cannot move the first word below
+  the three sequential provider round-trips.
+- tts-1 vs gpt-4o-mini-tts: 2.16 s vs 2.48 s for the same clip — not worth
+  the quality trade.
+- The first-fragment cap (~45 chars) stays: it bounds the worst case and
+  helps when the provider is slow, but the fixed API round-trip dominates.
+
+Conclusion for review: ~6.5-9.5 s first-word is the measured floor of the
+turn-based (transcribe → classify → tts) architecture with OpenAI's
+per-call latencies. Sub-2 s requires the OpenAI Realtime API path (~0.9 s
+first audio, speech-native, interruptible) bridged to the device WebSocket
+protocol — a separate integration (the runtime already serves browser and
+SIP clients via CALLBOX_VOICE_RUNTIME=openai). Intermediate options
+(Groq-hosted Whisper for STT, ~0.8 s saved; Groq chat-completions for
+intent, ~1.5 s saved) shave 2-3 s at the cost of provider mixing and are
+not implemented in this PR.
