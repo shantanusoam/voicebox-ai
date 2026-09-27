@@ -307,3 +307,25 @@ under radio stalls.
 
 Verified: firmware build + all software gates at commit 2dc0be3 on this
 machine; physical call results as above. The PR stays open for review.
+
+## PR #9 follow-up (same day): sentence-streamed TTS
+
+The dominant delay was never the radio: it was the gateway waiting for OpenAI
+TTS to generate the ENTIRE reply clip before the first byte went out (~7-9 s
+of measured silence, matching the repo's turn-based budget). process_turn now
+splits the reply into sentences (first sentence alone, later fragments
+grouped so TTS call count stays proportional) and streams each sentence
+through the same paced downlink: the device plays sentence N while sentence
+N+1 generates. Wire format unchanged (CBB1/CBB2/JSON all intact); pacing
+continues across sentences with the jitter prime applied only to the first.
+
+Measured on the S25 rig (agent + adpcm): caller reports the first word
+arrives noticeably sooner than the previous ~7-9 s (provider thinking time
+and playback prime remain separate, as before). Three turns in one 51 s call,
+250 pytest cases pass, no gateway errors in the journal.
+
+Remaining latency structure (measured separately): commit window ~0.8-1.8 s
+(deterministic, anti-hangup gate) + STT ~1-2 s + intent LLM ~1 s + FIRST
+sentence TTS ~1-2 s = ~4-5 s to first word (was ~7-9 s), then real-time
+streaming. The next latency tier is the OpenAI Realtime path (~0.9 s), which
+needs a device-protocol bridge and is out of this PR's scope.

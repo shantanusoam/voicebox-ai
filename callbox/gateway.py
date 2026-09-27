@@ -20,7 +20,7 @@ TOUCH_FLUSH_SECONDS = 1
 LOG = logging.getLogger(__name__)
 
 
-async def send_paced_downlink(ws, output, epoch, current_epoch, codec='binary'):
+async def send_paced_downlink(ws, output, epoch, current_epoch, codec='binary', lead_batches=2):
     """Prime 12 frames, then send no faster than the 20 ms playback clock.
 
     The ESP32 has one 20-frame receive/playback queue. A large initial burst
@@ -31,7 +31,7 @@ async def send_paced_downlink(ws, output, epoch, current_epoch, codec='binary'):
     step = DOWNLINK_BATCH_FRAMES
     adpcm_state = (0, 0)
     for index in range(0, len(output), step * FRAME_BYTES):
-        if index >= 2 * step * FRAME_BYTES:
+        if index >= lead_batches * step * FRAME_BYTES:
             await asyncio.sleep(step * 0.02)
         if current_epoch() != epoch:
             return
@@ -63,6 +63,23 @@ async def send_binary_echo(ws, echoed, epoch, codec):
             payload = pack_audio_batch(frames, group[0][0], epoch, DOWNLINK_BATCH_MAGIC)
         await ws.send_bytes(payload)
 
+
+_SENTENCE_BOUNDARY = re.compile(r'(?<=[.!?])\s+')
+
+def split_reply_sentences(text):
+    """First sentence alone (fast first audio); later fragments grouped so the
+    TTS call count stays proportional to reply length, not punctuation."""
+    parts = [p.strip() for p in _SENTENCE_BOUNDARY.split((text or '').strip()) if p.strip()]
+    if len(parts) <= 1:
+        return parts
+    rest, group = [], []
+    for p in parts[1:]:
+        group.append(p)
+        if len(' '.join(group)) >= 60:
+            rest.append(' '.join(group)); group = []
+    if group:
+        rest.append(' '.join(group))
+    return [parts[0]] + rest
 
 class Gateway:
     def __init__(self, db, agent, provider, config):
@@ -127,18 +144,28 @@ class Gateway:
                 self.db.cache(workspace,'ws-audio:'+call_id,request_id,payload,result)
                 if buffer.epoch != epoch: return
                 await send({'type':'turn.result','call_id':call_id,'epoch':epoch, **result})
-                wav = await self.provider.speak(result['reply'], wav=True)
-                output = await resample_async(wav)
-                if downlink_codec:
-                    await send_paced_downlink(ws, output, epoch, lambda: buffer.epoch,
-                                              downlink_codec)
-                else:
-                    for index, start in enumerate(range(0, len(output), FRAME_BYTES)):
-                        if buffer.epoch != epoch: return
-                        frame = output[start:start+FRAME_BYTES].ljust(FRAME_BYTES, b'\0')
-                        await send({'type':'audio.output','call_id':call_id,'epoch':epoch,'seq':index,
-                                    'sample_rate':SAMPLE_RATE,'pcm16':base64.b64encode(frame).decode()})
-                        await asyncio.sleep(.02)
+                # Stream the reply sentence by sentence: first audio goes out
+                # after one short TTS call; later sentences generate while the
+                # device plays the previous ones. Same wire format, pacing
+                # continues across sentences (prime only the very first one).
+                sentences = split_reply_sentences(result['reply'])
+                if not sentences:
+                    sentences = [result['reply'] or '']
+                for sentence_index, sentence in enumerate(sentences):
+                    if buffer.epoch != epoch: return
+                    wav = await self.provider.speak(sentence, wav=True)
+                    output = await resample_async(wav)
+                    if downlink_codec:
+                        await send_paced_downlink(ws, output, epoch, lambda: buffer.epoch,
+                                                  downlink_codec,
+                                                  lead_batches=2 if sentence_index == 0 else 0)
+                    else:
+                        for index, start in enumerate(range(0, len(output), FRAME_BYTES)):
+                            if buffer.epoch != epoch: return
+                            frame = output[start:start+FRAME_BYTES].ljust(FRAME_BYTES, b'\0')
+                            await send({'type':'audio.output','call_id':call_id,'epoch':epoch,'seq':index,
+                                        'sample_rate':SAMPLE_RATE,'pcm16':base64.b64encode(frame).decode()})
+                            await asyncio.sleep(.02)
                 await send({'type':'turn.done','call_id':call_id,'epoch':epoch})
             except AppError as error:
                 await fail(error)
