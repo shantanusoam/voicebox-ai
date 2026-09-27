@@ -16,6 +16,7 @@
 #include "freertos/semphr.h"
 #include "freertos/event_groups.h"
 #include "esp_system.h"
+#include "esp_heap_caps.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_log.h"
@@ -31,6 +32,8 @@
 #include "esp_hf_client_api.h"
 #include "sbc.h"
 #include "callbox_audio_ring.h"
+#include "playback_queue.h"
+#include "adpcm.h"
 
 static const char *TAG = "callbox";
 
@@ -56,7 +59,8 @@ static uint32_t s_tx_seq, s_out_epoch, s_capture_epoch;
 static uint32_t s_turn_counter;
 
 /* rings (external sync required by the ring contract) */
-static cb_audio_ring s_in_ring, s_out_ring;
+static cb_audio_ring s_in_ring;
+static cb_playback_queue s_playback;
 static SemaphoreHandle_t s_in_lock, s_out_lock;
 
 /* mSBC frames from the BT callback */
@@ -128,18 +132,19 @@ static size_t s_accum_len;
 static uint8_t s_accum_opcode;
 static uint32_t s_dl_frames, s_dl_bad, s_dl_stale;
 
-/* Incremental downlink reassembly: frames are pushed to the playback ring as
- * soon as their 640 bytes are complete — the full batch is never buffered
- * (free heap on a no-PSRAM board running BT+Wi-Fi is ~5 KB; a 6 KB batch
- * buffer was the straw that broke Bluedroid's HFP malloc at connect). */
+/* Incremental CBB1/CBB2 decoding into the one bounded playback queue. The
+ * WebSocket component may deliver a complete 3856-byte PCM batch in s_accum;
+ * this parser never allocates a second batch (HFP pairing needs spare heap). */
 static uint8_t s_bin_hdr[16];
 static size_t s_bin_hdr_len;
 static uint8_t s_bin_frame[CB_FRAME_BYTES];
+static uint8_t s_bin_pcm[CB_FRAME_BYTES];
 static size_t s_bin_got;
-static uint32_t s_bin_count, s_bin_epoch, s_bin_idx;
+static uint32_t s_bin_count, s_bin_epoch, s_bin_idx, s_bin_first_seq;
+static size_t s_bin_frame_bytes;
+static bool s_bin_adpcm;
 
-/* Incremental CBB1 downlink consumer. Returns true when the byte belongs to
- * a batch that is still being consumed; false starts a fresh header. */
+/* Incremental CBB1/CBB2 downlink consumer. */
 static void handle_downlink_bytes(const uint8_t *buf, size_t len)
 {
     while (len) {
@@ -148,28 +153,42 @@ static void handle_downlink_bytes(const uint8_t *buf, size_t len)
             memcpy(s_bin_hdr + s_bin_hdr_len, buf, take);
             s_bin_hdr_len += take; buf += take; len -= take;
             if (s_bin_hdr_len < 16) return;
-            if (memcmp(s_bin_hdr, "CBB1", 4) != 0 || s_bin_hdr[5] != 0) {
+            s_bin_adpcm = memcmp(s_bin_hdr, "CBB2", 4) == 0;
+            if ((!s_bin_adpcm && memcmp(s_bin_hdr, "CBB1", 4) != 0) || s_bin_hdr[5] != 0) {
                 s_dl_bad++; s_bin_hdr_len = 0; return; /* resync: drop rest */
             }
             uint16_t frame_bytes = (uint16_t)((s_bin_hdr[6] << 8) | s_bin_hdr[7]);
+            s_bin_frame_bytes = s_bin_adpcm ? CB_ADPCM_BYTES : CB_FRAME_BYTES;
             s_bin_count = ((uint32_t)s_bin_hdr[4]);
+            s_bin_first_seq = ((uint32_t)s_bin_hdr[8] << 24) | ((uint32_t)s_bin_hdr[9] << 16)
+                            | ((uint32_t)s_bin_hdr[10] << 8) | s_bin_hdr[11];
             s_bin_epoch = ((uint32_t)s_bin_hdr[12] << 24) | ((uint32_t)s_bin_hdr[13] << 16)
                         | ((uint32_t)s_bin_hdr[14] << 8) | s_bin_hdr[15];
-            if (frame_bytes != CB_FRAME_BYTES || s_bin_count == 0 || s_bin_count > 6) {
+            if (frame_bytes != s_bin_frame_bytes || s_bin_count == 0 || s_bin_count > 6) {
                 s_dl_bad++; s_bin_hdr_len = 0; return;
             }
             if (s_bin_epoch != s_out_epoch) { s_dl_stale++; s_bin_hdr_len = 0; return; }
             s_bin_idx = 0; s_bin_got = 0;
         }
-        size_t need = CB_FRAME_BYTES - s_bin_got;
+        size_t need = s_bin_frame_bytes - s_bin_got;
         size_t take = need > len ? len : need;
         memcpy(s_bin_frame + s_bin_got, buf, take);
         s_bin_got += take; buf += take; len -= take;
-        if (s_bin_got == CB_FRAME_BYTES) {
+        if (s_bin_got == s_bin_frame_bytes) {
+            const uint8_t *pcm = s_bin_frame;
+            if (s_bin_adpcm) {
+                if (!cb_adpcm_decode(s_bin_frame, s_bin_frame_bytes,
+                                     s_bin_pcm, sizeof(s_bin_pcm))) {
+                    s_dl_bad++; s_bin_hdr_len = 0; s_bin_got = 0; return;
+                }
+                pcm = s_bin_pcm;
+            }
             lock_take(s_out_lock);
-            cb_ring_push(&s_out_ring, s_bin_frame, CB_FRAME_BYTES, 0, s_bin_epoch);
+            bool accepted = cb_playback_push(&s_playback, pcm, CB_FRAME_BYTES,
+                                              s_bin_first_seq + s_bin_idx, s_bin_epoch);
             lock_give(s_out_lock);
-            s_dl_frames++; s_bin_got = 0;
+            if (accepted) s_dl_frames++;
+            s_bin_got = 0;
             if (++s_bin_idx == s_bin_count) { s_bin_hdr_len = 0; return; }
         }
     }
@@ -283,8 +302,11 @@ static void handle_message(const char *msg, size_t len)
             if (mbedtls_base64_decode(out, sizeof(out), &olen,
                     (const unsigned char *)pcm->valuestring,
                     strlen(pcm->valuestring)) == 0 && olen == CB_FRAME_BYTES) {
+                cJSON *seq = cJSON_GetObjectItem(root, "seq");
                 lock_take(s_out_lock);
-                cb_ring_push(&s_out_ring, out, olen, 0, epoch);
+                (void)cb_playback_push(&s_playback, out, olen,
+                                       (seq && cJSON_IsNumber(seq)) ? (uint32_t)seq->valuedouble : 0,
+                                       epoch);
                 lock_give(s_out_lock);
             }
         }
@@ -296,7 +318,7 @@ static void handle_message(const char *msg, size_t len)
          * capture stale at AudioBuffer.add(). */
         s_capture_epoch = s_out_epoch;
         lock_take(s_out_lock);
-        cb_ring_interrupt(&s_out_ring, s_out_epoch);
+        cb_playback_clear(&s_playback, s_out_epoch);
         lock_give(s_out_lock);
         ESP_LOGW(TAG, "INTERRUPTED — playback cleared, epoch=%" PRIu32, s_out_epoch);
     } else if (strcmp(type, "turn.processing") == 0) {
@@ -439,24 +461,28 @@ static void stats_task(void *arg)
         (void)esp_hf_client_pkt_stat_nums_get(s_sync_conn_hdl());
 
         uint64_t in_dropped, in_under, out_dropped, out_under;
+        size_t out_high, out_count;
         lock_take(s_in_lock);
         in_dropped = s_in_ring.dropped; in_under = s_in_ring.underflows;
         lock_give(s_in_lock);
         lock_take(s_out_lock);
-        out_dropped = s_out_ring.dropped; out_under = s_out_ring.underflows;
+        out_dropped = s_playback.dropped; out_under = s_playback.underflows;
+        out_high = s_playback.high_water; out_count = s_playback.count;
         lock_give(s_out_lock);
         ESP_LOGI(TAG, "STATS msbc_fail=%" PRIu32 " net_send_drop=%" PRIu32
                  " rxq_drop=%" PRIu32 " ctrl_drop=%" PRIu32 " rx_alloc_fail=%" PRIu32
-                 " in(drop=%llu,under=%llu,high=%u) out(drop=%llu,under=%llu,high=%u) tx_seq=%" PRIu32
+                 " in(drop=%llu,under=%llu,high=%u) out(drop=%llu,under=%llu,high=%u,queued=%u) tx_seq=%" PRIu32
                  " dl(frames=%" PRIu32 ",bad=%" PRIu32 ",stale=%" PRIu32 ")"
                  " rms_max=%d/thr=%d",
                  s_msbc_decode_fail, s_net_send_drop, s_rxq_drop, s_ctrl_rxq_drop, s_rx_alloc_fail,
                  (unsigned long long)in_dropped, (unsigned long long)in_under,
                  (unsigned)s_in_ring.high_water,
                  (unsigned long long)out_dropped, (unsigned long long)out_under,
-                 (unsigned)s_out_ring.high_water, s_tx_seq,
+                 (unsigned)out_high, (unsigned)out_count, s_tx_seq,
                  s_dl_frames, s_dl_bad, s_dl_stale,
                  (int)s_rms_max, (int)CONFIG_CB_VAD_THRESHOLD);
+        ESP_LOGI(TAG, "HEAP free=%u largest=%u", (unsigned)esp_get_free_heap_size(),
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
         s_rms_max = 0;
     }
 }
@@ -558,70 +584,23 @@ static void out_timer_cb(void *arg)
     xSemaphoreGive(s_out_tick);
 }
 
-/* Playback jitter buffer: the Wi-Fi downlink degrades while SCO is active
- * (BT/Wi-Fi coexistence), so frames arrive in bursts. Stage ~300 ms before
- * starting playout; re-prime after a starvation gap instead of emitting
- * choppy fragments. Static allocation: no heap work in the audio path. */
-#define JITTER_FRAMES 20
-#define JITTER_PRIME 12
-static cb_frame s_jitter[JITTER_FRAMES];
-static size_t s_j_head, s_j_count;
-static bool s_j_primed;
-
-static bool jitter_push(const cb_frame *f)
-{
-    if (s_j_count >= JITTER_FRAMES) return false;
-    size_t tail = (s_j_head + s_j_count) % JITTER_FRAMES;
-    s_jitter[tail] = *f;
-    s_j_count++;
-    return true;
-}
-
-static bool jitter_pop(cb_frame *out)
-{
-    if (s_j_count == 0) return false;
-    *out = s_jitter[s_j_head];
-    s_j_head = (s_j_head + 1) % JITTER_FRAMES;
-    s_j_count--;
-    return true;
-}
-
-static void jitter_reset(void)
-{
-    s_j_head = s_j_count = 0;
-    s_j_primed = false;
-}
-
 static void codec_out_task(void *arg)
 {
     uint8_t leftover[CB_FRAME_BYTES];
     size_t leftover_len = 0;
+    uint32_t playback_epoch = 0;
 
     while (1) {
         if (xSemaphoreTake(s_out_tick, portMAX_DELAY) != pdTRUE) continue;
-        if (!s_audio_up || !s_sbc_ready) { leftover_len = 0; jitter_reset(); continue; }
-
-        /* refill the jitter buffer from the playback ring */
-        cb_frame f;
-        for (;;) {
-            bool got;
-            lock_take(s_out_lock);
-            got = cb_ring_pop(&s_out_ring, &f); /* false + silence on empty */
-            lock_give(s_out_lock);
-            if (!got) break;
-            if (!jitter_push(&f)) {
-                /* jitter full: keep the newest data, drop the stale frame */
-                cb_frame drop;
-                jitter_pop(&drop);
-                jitter_push(&f);
-            }
+        if (!s_audio_up || !s_sbc_ready) { leftover_len = 0; continue; }
+        if (playback_epoch != s_out_epoch) {
+            leftover_len = 0; playback_epoch = s_out_epoch;
         }
-
-        if (!s_j_primed && s_j_count >= JITTER_PRIME) s_j_primed = true;
 
         /* feed exactly 240 B (120 samples) per 7.5 ms tick */
         uint8_t chunk[240];
         size_t chunk_len = 0;
+        cb_frame f;
         while (chunk_len < 240) {
             if (leftover_len) {
                 size_t take = leftover_len > 240 - chunk_len ? 240 - chunk_len : leftover_len;
@@ -629,13 +608,17 @@ static void codec_out_task(void *arg)
                 chunk_len += take;
                 memmove(leftover, leftover + take, leftover_len - take);
                 leftover_len -= take;
-            } else if (s_j_primed && jitter_pop(&f)) {
-                memcpy(leftover, f.data, CB_FRAME_BYTES);
-                leftover_len = CB_FRAME_BYTES;
             } else {
-                if (s_j_primed) s_j_primed = false; /* starved: re-prime */
-                memset(chunk + chunk_len, 0, 240 - chunk_len);
-                chunk_len = 240;
+                lock_take(s_out_lock);
+                bool got = cb_playback_pop(&s_playback, &f);
+                lock_give(s_out_lock);
+                if (got && f.epoch == playback_epoch) {
+                    memcpy(leftover, f.data, CB_FRAME_BYTES);
+                    leftover_len = CB_FRAME_BYTES;
+                } else {
+                    memset(chunk + chunk_len, 0, 240 - chunk_len);
+                    chunk_len = 240;
+                }
             }
         }
 
@@ -671,10 +654,8 @@ static void ws_event_handler(void *handler_args, esp_event_base_t base,
         cJSON_AddStringToObject(o, "protocol", "callbox.v1");
         cJSON_AddStringToObject(o, "device_id", CONFIG_CB_DEVICE_ID);
         cJSON_AddStringToObject(o, "token", CONFIG_CB_DEVICE_TOKEN);
-        /* Negotiate binary TTS downlink (CBB1 batches): 10x fewer messages and
-         * ~30% fewer bytes than per-frame JSON — SCO/Wi-Fi coexistence needs
-         * the radio airtime. Server falls back to JSON for old devices. */
-        cJSON_AddStringToObject(o, "downlink", "binary");
+        /* CBB1 PCM or CBB2 IMA ADPCM; old servers fall back to JSON. */
+        cJSON_AddStringToObject(o, "downlink", CONFIG_CB_DOWNLINK_CODEC);
         char *str = cJSON_PrintUnformatted(o);
         if (str) { send_text(str); cJSON_free(str); }
         cJSON_Delete(o);
@@ -840,9 +821,9 @@ static void bridge_on_audio_up(esp_hf_sync_conn_hdl_t hdl)
     (void)esp_bt_gap_set_scan_mode(ESP_BT_NON_CONNECTABLE, ESP_BT_NON_DISCOVERABLE);
 
     lock_take(s_in_lock);   cb_ring_init(&s_in_ring);  lock_give(s_in_lock);
-    lock_take(s_out_lock);  cb_ring_init(&s_out_ring); lock_give(s_out_lock);
+    lock_take(s_out_lock);  cb_playback_init(&s_playback); lock_give(s_out_lock);
     s_asm_len = 0; s_tx_seq = 0; s_out_epoch = 0; s_capture_epoch = 0;
-    jitter_reset();
+    s_dl_frames = s_dl_bad = s_dl_stale = 0;
     s_turn_pending = false; s_speech_frames = s_silence_frames = s_collected = 0;
 
     if (local_hfp_test_enabled()) {
@@ -1023,7 +1004,7 @@ void app_main(void)
     s_out_lock = xSemaphoreCreateMutex();
     s_out_tick = xSemaphoreCreateBinary();
     cb_ring_init(&s_in_ring);
-    cb_ring_init(&s_out_ring);
+    cb_playback_init(&s_playback);
 
     const esp_timer_create_args_t timer_args = {
         .callback = out_timer_cb, .name = "out_tick",
@@ -1036,6 +1017,11 @@ void app_main(void)
         strcmp(CONFIG_CB_CALL_MODE, "agent") != 0) {
         ESP_LOGE(TAG, "invalid CONFIG_CB_CALL_MODE=%s (use local_echo, local_tone, echo or agent)",
                  CONFIG_CB_CALL_MODE);
+        return;
+    }
+    if (strcmp(CONFIG_CB_DOWNLINK_CODEC, "binary") != 0 &&
+        strcmp(CONFIG_CB_DOWNLINK_CODEC, "adpcm") != 0) {
+        ESP_LOGE(TAG, "invalid CONFIG_CB_DOWNLINK_CODEC=%s", CONFIG_CB_DOWNLINK_CODEC);
         return;
     }
 

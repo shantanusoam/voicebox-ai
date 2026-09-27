@@ -232,3 +232,126 @@ promise:
 Serial measurement caveat: the CH340 stale-buffer glitch (48 MB/min of one
 repeated line) returned during this session; verify STATS via a fresh
 capture or trust server-side counters instead.
+
+## Candidate follow-up (software only; not flashed or heard)
+
+The former receive path accepted two immediate 6-frame CBB1 batches into an
+8-frame ring before a separate 20-frame jitter queue. If the playback task
+did not drain between those network events, four frames were silently
+rejected; `dl_frames` still increased. The 0.92x server sleep also fed audio
+faster than the playback clock over a long reply. These are software loss
+paths, so the earlier ~10% subjective intelligibility does not yet establish
+the physical RF ceiling.
+
+The candidate branch uses one 20-frame playback queue, counts only accepted
+frames, logs queue drop/underflow/occupancy and heap, sends at the 20 ms clock,
+and adds negotiated CBB2/IMA ADPCM (164 bytes per 20 ms) for a 4x smaller
+downlink. Host tests and the gateway eval do not include SCO+Wi-Fi RF. First
+flash and compare CBB1 vs CBB2 on the S25, then measure packet arrivals and
+RF throughput before declaring a hardware limit or moving to UDP.
+
+## PR #9 hardware validation (2026-09-26): A/B campaign results
+
+Hardware validation of fix/esp32-downlink-playback (commit 2dc0be3), per the
+PR's own gate. Server: worktree at 2dc0be3 (SHA
+2dc0be3549c72b23ab8bf303db226919ba97a746), firmware: same commit, built with
+ESP-IDF v5.5.5 (build clean, 0x148090 bytes, 57% app partition free) and
+flashed at 115200 baud. `python scripts/verify.py`: ALL GATES PASSED (69/69
+checks incl. the new queue/ADPCM parity tests) on this machine before
+flashing.
+
+### Environment traps that cost the first two "failures" (not code bugs)
+1. Port 8787 was still held by the previous session's server unit — the PR
+   firmware talked to the OLD gateway for two calls. Kill stale units before
+   blaming code. The PR server must be the process bound to 8787.
+2. The PR worktree starts with a FRESH .runtime DB — the lab device
+   (dev_95741eee…) is not registered in it, so hello was rejected as invalid
+   credentials and the call had no server at all. Copy the lab DB into the
+   worktree before testing.
+3. The PC had roamed to Excitel_161095441_5 (5 GHz) while the ESP32 is on
+   the 2.4 GHz SSID; the router isolates the bands. Symptom: WS
+   ESP_ERR_ESP_TLS_CONNECT from the device, phone-browser probe to the
+   server also fails. Fix: keep the PC on the 2.4 GHz SSID. The ESP32 radio
+   is 2.4 GHz only.
+
+### Campaign (held constant: S25, 2.4 GHz AP, ~2 m distance, server host, spoken sample)
+| Arm | Calls | Result |
+|---|---|---|
+| local_tone (isolation gate) | 1 | Continuous single-frequency tone on the caller end for the whole call. LOCAL_HFP sent=4127 drop=0 bad=0. Bluetooth mSBC playout exonerated. |
+| echo + binary | 1 | No usable voice. Echo couples downlink 1:1 to uplink; round-trip through the coexistence-choked link collapses both (tx_seq advanced ~1.3 fps while the input ring dropped ~90 fps of capture). Echo collapse is an artifact of 1:1 coupling, not of the codec or the queue. |
+| agent + binary | 1 | Reply audible with dropouts; WS died mid-call (server-side websockets drain AssertionError during TTS push). |
+| agent + adpcm (CBB2) | 3 + 1 instrumented | Call 1: mostly clear, phrase-level drops (caller transcribed ~75% of the reply text). Call 2: no reply — caller hung up 300 ms after the last speech spike, before the 800 ms trailing-silence commit window closed (hang-up race, not a codec failure). Call 3 + instrumented: reply heard. |
+
+### Instrumented agent+adpcm playback (STATS/HEAP during TTS)
+- `dl(frames=752, bad=0, stale=0)` — 15 s of TTS delivered with zero bad or
+  stale blocks.
+- `out(drop=2, under=13, high=20, queued=3..6)` — **98% frame delivery**
+  during playback; the residual choppiness is the 13 stall gaps.
+- `HEAP free=33.5 KB largest=26.6 KB` during playback (22.6 KB during the
+  longer turn) — comfortable, no allocation failures, BT pairing unaffected.
+- First-audio delay: TURN_PROCESSING → first audio ≈ TTS generation (~4-5 s,
+  OpenAI gpt-4o-mini-tts) + ~0.4 s jitter prime (first two batches un-paced).
+  Provider thinking time and playback prime are separate terms.
+- Residual uplink capture loss (in drop=78..196 per turn) degrades STT
+  transcripts slightly but every instrumented turn transcribed and ran.
+
+### Verdict
+The PR's locked playback queue + CBB2 ADPCM downlink turns a ~10%-intelligible
+path into a working one: intelligible replies, 98% frame delivery, healthy
+heap, no mid-call disconnects in the final arm. Remaining word loss (~2% of
+frames + phrase gaps under multi-second radio stalls) is bounded by SCO/Wi-Fi
+coexistence on the shared radio, now measured directly rather than inferred.
+The remaining levers (UDP downlink probe, SIP/Asterisk demo path) are tracked
+in the earlier addendum. No claim of "no lag" is made: dropouts remain audible
+under radio stalls.
+
+Verified: firmware build + all software gates at commit 2dc0be3 on this
+machine; physical call results as above. The PR stays open for review.
+
+## PR #9 follow-up (same day): sentence-streamed TTS
+
+The dominant delay was never the radio: it was the gateway waiting for OpenAI
+TTS to generate the ENTIRE reply clip before the first byte went out (~7-9 s
+of measured silence, matching the repo's turn-based budget). process_turn now
+splits the reply into sentences (first sentence alone, later fragments
+grouped so TTS call count stays proportional) and streams each sentence
+through the same paced downlink: the device plays sentence N while sentence
+N+1 generates. Wire format unchanged (CBB1/CBB2/JSON all intact); pacing
+continues across sentences with the jitter prime applied only to the first.
+
+Measured on the S25 rig (agent + adpcm): caller reports the first word
+arrives noticeably sooner than the previous ~7-9 s (provider thinking time
+and playback prime remain separate, as before). Three turns in one 51 s call,
+250 pytest cases pass, no gateway errors in the journal.
+
+Remaining latency structure (measured separately): commit window ~0.8-1.8 s
+(deterministic, anti-hangup gate) + STT ~1-2 s + intent LLM ~1 s + FIRST
+sentence TTS ~1-2 s = ~4-5 s to first word (was ~7-9 s), then real-time
+streaming. The next latency tier is the OpenAI Realtime path (~0.9 s), which
+needs a device-protocol bridge and is out of this PR's scope.
+
+### Measured first-word latency floor (agent+adpcm, instrumented)
+
+Per-stage timings from the gateway (turn-timing log lines):
+- stt 1.07-1.29 s, llm 0.99-2.47 s, tts(first fragment) 2.2-3.6 s.
+- OpenAI TTS latency does NOT scale with clip length (2.48 s for a 76-char
+  clip vs 2.16 s for tts-1; 2.6-3.6 s observed for 4-8 s clips). First-word
+  = commit window (0.8-1.8 s) + stt + llm + tts + ~0.4 s prime
+  = ~6.5-9.5 s. Caller-perceived: "still 9 s" — matches measurement.
+- Sentence streaming removed the TAIL latency (no full-clip wait; later
+  sentences generate during playback) but cannot move the first word below
+  the three sequential provider round-trips.
+- tts-1 vs gpt-4o-mini-tts: 2.16 s vs 2.48 s for the same clip — not worth
+  the quality trade.
+- The first-fragment cap (~45 chars) stays: it bounds the worst case and
+  helps when the provider is slow, but the fixed API round-trip dominates.
+
+Conclusion for review: ~6.5-9.5 s first-word is the measured floor of the
+turn-based (transcribe → classify → tts) architecture with OpenAI's
+per-call latencies. Sub-2 s requires the OpenAI Realtime API path (~0.9 s
+first audio, speech-native, interruptible) bridged to the device WebSocket
+protocol — a separate integration (the runtime already serves browser and
+SIP clients via CALLBOX_VOICE_RUNTIME=openai). Intermediate options
+(Groq-hosted Whisper for STT, ~0.8 s saved; Groq chat-completions for
+intent, ~1.5 s saved) shave 2-3 s at the cost of provider mixing and are
+not implemented in this PR.

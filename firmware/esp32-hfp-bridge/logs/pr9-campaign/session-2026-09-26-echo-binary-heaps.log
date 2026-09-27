@@ -1,0 +1,76 @@
+ st747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662) BT_HCI: hci cmd send:W (747662 hdl 0x80
+W (748142) BT_HCI: hcif mode change: hdl 0x80, mode 0, intv 0, status 0x0
+W (755342) BT_HCI: hcif mode change: hdl 0x80, mode 2, intv 768, status 0x0
+W (774062) BT_HCI: hci cmd send: unsniff: hdl 0x80
+W (774542) BT_HCI: hcif mode change: hdl 0x80, mode 0, intv 0, status 0x0
+W (781752) BT_HCI: hci cmd send: sniff: hdl 0x80, intv(400 800)
+W (781752) BT_HCI: hcif mode change: hdl 0x80, mode 2, intv 768, status 0x0
+W (781752) BT_HCI: hcif mode change: hdl 0x80, mode 2, intv 0, status 0x1f
+W (802382) BT_HCI: hcif mode change: hdl 0x80, mode 0, intv 0, status 0x0
+I (802392) callbox: call setup 1
+I (802762) callbox: HF audio state 3 preferred_frame_size=57
+I (802762) callbox: BT AUDIO UP (mSBC) — call.start queued
+I (802852) callbox: CALL_STARTED id=call_d185ac43f4904f3c86
+I (802982) callbox: SCO PKTS rx(total=26,ok=25,err=0,none=1,lost=0) tx(total=28,discard=0)
+I (802982) callbox: STATS msbc_fail=0 net_send_drop=0 rxq_drop=0 ctrl_drop=0 rx_alloc_fail=0 in(drop=0,under=7109,high=1) out(drop=0,under=0,high=0,queued=0) tx_seq=5 dl(frames=0,bad=0,stale=0) rms_max=0/thr=120
+I (803002) callbox: HEAP free=30456 largest=24576
+I (803752) callbox: call setup 0
+I (808012) callbox: STATS msbc_fail=0 net_send_drop=0 rxq_drop=0 ctrl_drop=0 rx_alloc_fail=0 in(drop=172,under=17531,high=8) out(drop=5,under=1,high=20,queued=0) tx_seq=58 dl(frames=41,bad=0,stale=0) rms_max=0/thr=120
+I (808012) callbox: HEAP free=35128 largest=29696
+I (808012) callbox: SCO PKTS rx(total=696,ok=653,err=0,none=43,lost=0) tx(total=699,discard=0)
+I (813022) callbox: STATS msbc_fail=0 net_send_drop=0 rxq_drop=0 ctrl_drop=0 rx_alloc_fail=0 in(drop=282,under=64842,high=8) out(drop=5,under=1,high=20,queued=4) tx_seq=192 dl(frames=45,bad=0,stale=0) rms_max=0/thr=120
+I (813022) callbox: SCO PKTS rx(total=1364,ok=1286,err=0,none=78,lost=0) tx(total=1367,discard=0)
+I (813032) callbox: HEAP free=25440 largest=20480
+W (814122) BT_HCI: hci cmd send: sniff: hdl 0x80, intv(400 800)
+W (814122) BT_HCI: hcif mode change: hdl 0x80, mode 0, intv 0, status 0x20
+E (814122) BT_APPL: bta_dm_pm_btm_status hci_status=32
+I (818042) callbox: SCO PKTS rx(total=2033,ok=1914,err=0,none=119,lost=0) tx(total=2036,discard=0)
+I (818042) callbox: STATS msbc_fail=0 net_send_drop=0 rxq_drop=0 ctrl_drop=0 rx_alloc_fail=0 in(drop=438,under=89482,high=8) out(drop=5,under=2,high=20,queued=0) tx_seq=264 dl(frames=60,bad=0,stale=0) rms_max=0/thr=120
+I (818052) callbox: HEAP free=33380 largest=27648
+I (823062) callbox: SCO PKTS rx(total=2703,ok=2547,err=0,none=156,lost=0) tx(total=2705,discard=0)
+I (823062) callbox: STATS msbc_fail=0 net_send_drop=0 rxq_drop=0 ctrl_drop=0 rx_alloc_fail=0 in(drop=676,under=89482,high=8) out(drop=5,under=2,high=20,queued=0) tx_seq=264 dl(frames=60,bad=0,stale=0) rms_max=0/thr=120
+I (823072) callbox: HEAP free=33476 largest=27648
+I (828082) callbox: STATS msbc_fail=0 net_send_drop=0 rxq_drop=0 ctrl_drop=0 rx_alloc_fail=0 in(drop=912,under=89482,high=8) out(drop=5,under=2,high=20,queued=0) tx_seq=264 dl(frames=60,bad=0,stale=0) rms_max=0/thr=120
+I (828082) callbox: HEAP free=35148 largest=29696
+I (828082) callbox: SCO PKTS rx(total=3372,ok=3178,err=0,none=194,lost=0) tx(total=3375,discard=0)
+I (833092) callbox: STATS msbc_fail=0 net_send_drop=0 rxq_drop=0 ctrl_drop=0 rx_alloc_fail=0 in(drop=1129,under=90196,high=8) out(drop=5,under=2,high=20,queued=4) tx_seq=284 dl(frames=64,bad=0,stale=0) rms_max=0/thr=120
+I (833092) callbox: SCO PKTS rx(total=4040,ok=3810,err=0,none=230,lost=0) tx(total=4043,discard=0)
+I (833092) callbox: HEAP free=35216 largest=29696
+I (838112) callbox: STATS msbc_fail=0 net_send_drop=0 rxq_drop=0 ctrl_drop=0 rx_alloc_fail=0 in(drop=1364,under=90196,high=8) out(drop=5,under=2,high=20,queued=4) tx_seq=284 dl(frames=64,bad=0,stale=0) rms_max=0/thr=120
+I (838112) callbox: SCO PKTS rx(total=4709,ok=4436,err=0,none=273,lost=0) tx(total=4712,discard=0)
+I (838112) callbox: HEAP free=35208 largest=29696
+I (843132) callbox: STATS msbc_fail=0 net_send_drop=0 rxq_drop=0 ctrl_drop=0 rx_alloc_fail=0 in(drop=1600,under=90196,high=8) out(drop=5,under=2,high=20,queued=4) tx_seq=284 dl(frames=64,bad=0,stale=0) rms_max=0/thr=120
+I (843142) callbox: HEAP free=35064 largest=29696
+I (843132) callbox: SCO PKTS rx(total=5379,ok=5065,err=0,none=314,lost=0) tx(total=5381,discard=0)
+W (844062) BT_HCI: hcif disc complete: hdl 0x180, rsn 0x13 dev_find 1
+I (844062) callbox: HF audio state 0 preferred_frame_size=0
+W (844072) BT_APPL: bta_hf_client_sco_data_send: SCO not open
+W (844072) callbox: BT AUDIO DOWN — call.end queued
+I (848142) callbox: STATS msbc_fail=0 net_send_drop=0 rxq_drop=0 ctrl_drop=0 rx_alloc_fail=0 in(drop=1639,under=90196,high=8) out(drop=5,under=2,high=20,queued=4) tx_seq=284 dl(frames=64,bad=0,stale=0) rms_max=0/thr=120
+I (848142) callbox: SCO PKTS rx(total=0,ok=0,err=0,none=0,lost=0) tx(total=0,discard=0)
+I (848142) callbox: HEAP free=35208 largest=29696
+E (851052) transport_base: tcp_read error, errno=Connection reset by peer
+E (851052) transport_ws: Error read data(-2)
+E (851052) transport_ws: Error reading payload data(-2)
+E (851052) websocket_client: esp_transport_read() failed with -2, transport_error=ESP_OK, tls_error_code=0, tls_flags=0, errno=104
+E (851072) callbox: WS_ERROR type=0 transport=ERROR tls=0x3ffe87f0 sock_errno=1061224480 handshake=0
+E (851072) websocket_client: Error receive data
+I (851082) websocket_client: Reconnect after 10000 ms
+W (851082) callbox: WS_DISCONNECTED
+W (851182) BT_HCI: hcif mode change: hdl 0x80, mode 2, intv 768, status 0x0
+I (861132) callbox: WS_CONNECTED — hello
+I (861232) callbox: READY (device authenticated)
+W (874862) BT_HCI: hci cmd send: unsniff: hdl 0x80
+W (875342) BT_HCI: hcif mode change: hdl 0x80, mode 0, intv 0, status 0x0
+W (882522) BT_HCI: hcif mode change: hdl 0x80, mode 2, intv 768, status 0x0
+W (884462) BT_HCI: hci cmd send: unsniff: hdl 0x80
+W (884942) BT_HCI: hcif mode change: hdl 0x80, mode 0, intv 0, status 0x0
+W (892132) BT_HCI: hcif mode change: hdl 0x80, mode 2, intv 768, status 0x0
+W (896942) BT_HCI: hci cmd send: unsniff: hdl 0x80
+W (897422) BT_HCI: hcif mode change: hdl 0x80, mode 0, intv 0, status 0x0
+W (904552) BT_HCI: hcif mode change: hdl 0x80, mode 2, intv 768, status 0x0
+W (914712) BT_HCI: hci cmd send: unsniff: hdl 0x80
+W (915182) BT_HCI: hcif mode change: hdl 0x80, mode 0, intv 0, status 0x0
+W (922362) BT_HCI: hcif mode change: hdl 0x80, mode 2, intv 768, status 0x0
+W (938712) BT_HCI: hci cmd send: unsniff: hdl 0x80
+W (939182) BT_HCI: hcif mode change: hdl 0x80, mode 0, intv 0, status 0x0

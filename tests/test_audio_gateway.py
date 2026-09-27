@@ -1,10 +1,14 @@
 import base64
+import asyncio
 import io
 import json
 import wave
 import pytest
 from callbox.audio import AudioBuffer, FRAME_BYTES, MAX_TURN_BYTES, pack_audio_batch, unpack_audio_batch, to_wav, wav_to_pcm16
 from callbox.errors import AppError
+from callbox.gateway import send_paced_downlink
+from callbox.adpcm import BLOCK_BYTES, decode_frame
+from callbox.audio import ADPCM_BATCH_MAGIC, DOWNLINK_BATCH_HEADER
 
 
 def frame(seq=0,epoch=0):
@@ -41,6 +45,50 @@ def test_binary_audio_batch_roundtrip():
 def test_binary_audio_batch_rejects_bad_length():
     payload=pack_audio_batch([b'\0'*FRAME_BYTES], first_seq=0)
     with pytest.raises(AppError):unpack_audio_batch(payload[:-1])
+
+
+def test_paced_downlink_primes_twelve_then_uses_real_time(monkeypatch):
+    class Socket:
+        def __init__(self): self.sent = []
+        async def send_bytes(self, payload): self.sent.append((clock[0], unpack_audio_batch(payload)))
+    clock = [0.0]
+    async def sleep(seconds): clock[0] += seconds
+    monkeypatch.setattr('callbox.gateway.asyncio.sleep', sleep)
+    ws = Socket()
+    output = b'\x12\0' * (320 * 24)
+    asyncio.run(send_paced_downlink(ws, output, 0, lambda: 0))
+    assert [t for t, _ in ws.sent] == pytest.approx([0, 0, .12, .24])
+    assert [v['first_seq'] for _, v in ws.sent] == [0, 6, 12, 18]
+    assert b''.join(frame for _, v in ws.sent for frame in v['frames']) == output
+
+
+def test_paced_downlink_discards_stale_epoch_after_wait(monkeypatch):
+    epoch = [0]
+    class Socket:
+        def __init__(self): self.sent = []
+        async def send_bytes(self, payload): self.sent.append(payload)
+    async def sleep(seconds): epoch[0] = 1
+    monkeypatch.setattr('callbox.gateway.asyncio.sleep', sleep)
+    ws = Socket()
+    asyncio.run(send_paced_downlink(ws, b'\0' * FRAME_BYTES * 24, 0, lambda: epoch[0]))
+    assert len(ws.sent) == 2
+
+
+def test_paced_adpcm_downlink_uses_smaller_independent_blocks(monkeypatch):
+    async def sleep(seconds): pass
+    monkeypatch.setattr('callbox.gateway.asyncio.sleep', sleep)
+    class Socket:
+        def __init__(self): self.sent=[]
+        async def send_bytes(self, payload): self.sent.append(payload)
+    ws=Socket()
+    asyncio.run(send_paced_downlink(ws, b'\x12\0' * (320 * 13), 0, lambda: 0, 'adpcm'))
+    assert len(ws.sent)==3
+    for seq, count, payload in ((0, 6, ws.sent[0]), (6, 6, ws.sent[1]), (12, 1, ws.sent[2])):
+        magic, n, flags, size, first, epoch=DOWNLINK_BATCH_HEADER.unpack_from(payload)
+        assert (magic, n, flags, size, first, epoch)==(ADPCM_BATCH_MAGIC, count, 0, BLOCK_BYTES, seq, 0)
+        assert len(payload)==16+count*BLOCK_BYTES
+        for i in range(count):
+            assert len(decode_frame(payload[16+i*BLOCK_BYTES:16+(i+1)*BLOCK_BYTES]))==FRAME_BYTES
 
 def test_audio_interrupt_discards_input_and_increments_epoch():
     b=AudioBuffer();b.add(frame());assert len(b.data)==640
@@ -110,6 +158,39 @@ def test_gateway_accepts_binary_audio_batch(client,db):
         ws.send_json({'type':'call.end','call_id':cid})
         assert ws.receive_json()['type']=='call.ended'
     assert db.devices('clinic-demo')[0]['frames']==4
+
+
+def test_gateway_negotiated_echo_uses_binary_batches(client):
+    d=provision(client)
+    with client.websocket_connect('/ws/device') as ws:
+        ws.send_json({'type':'hello','protocol':'callbox.v1','device_id':d['id'],
+                      'token':d['token'],'downlink':'binary'})
+        assert ws.receive_json()['type']=='ready'
+        cid=start(ws)
+        for first in (0, 4, 8):
+            frames=[bytes([n])*FRAME_BYTES for n in range(first, first+4)]
+            ws.send_bytes(pack_audio_batch(frames, first_seq=first))
+            batch=unpack_audio_batch(ws.receive_bytes())
+            assert batch['frames']==frames and batch['first_seq']==first
+        ws.send_json({'type':'call.end','call_id':cid})
+        assert ws.receive_json()['type']=='call.ended'
+
+
+def test_gateway_negotiated_echo_uses_adpcm(client):
+    d=provision(client)
+    with client.websocket_connect('/ws/device') as ws:
+        ws.send_json({'type':'hello','protocol':'callbox.v1','device_id':d['id'],
+                      'token':d['token'],'downlink':'adpcm'})
+        assert ws.receive_json()['type']=='ready'
+        cid=start(ws)
+        frames=[b'\x12\0'*320 for _ in range(4)]
+        ws.send_bytes(pack_audio_batch(frames, 0))
+        payload=ws.receive_bytes()
+        magic, count, _, size, first, epoch=DOWNLINK_BATCH_HEADER.unpack_from(payload)
+        assert (magic,count,size,first,epoch)==(ADPCM_BATCH_MAGIC,4,BLOCK_BYTES,0,0)
+        assert len(payload)==16+4*BLOCK_BYTES
+        ws.send_json({'type':'call.end','call_id':cid})
+        assert ws.receive_json()['type']=='call.ended'
 
 def test_gateway_rejects_cross_call_frames(client):
     d=provision(client)

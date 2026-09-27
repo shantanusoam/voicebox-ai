@@ -9,7 +9,9 @@ import re
 import time
 from fastapi import WebSocket, WebSocketDisconnect
 from .audio import (AudioBuffer, FRAME_BYTES, SAMPLE_RATE, to_wav, resample_async,
-    unpack_audio_batch, pack_audio_batch, DOWNLINK_BATCH_FRAMES, DOWNLINK_BATCH_MAGIC)
+    unpack_audio_batch, pack_audio_batch, pack_adpcm_batch,
+    DOWNLINK_BATCH_FRAMES, DOWNLINK_BATCH_MAGIC)
+from .adpcm import encode_frame as encode_adpcm_frame
 from .errors import AppError
 
 
@@ -17,6 +19,78 @@ AUTH_RECHECK_SECONDS = 5
 TOUCH_FLUSH_SECONDS = 1
 LOG = logging.getLogger(__name__)
 
+
+async def send_paced_downlink(ws, output, epoch, current_epoch, codec='binary', lead_batches=2):
+    """Prime 12 frames, then send no faster than the 20 ms playback clock.
+
+    The ESP32 has one 20-frame receive/playback queue. A large initial burst
+    overran its former 8-frame ingress queue, while 0.92x real-time pacing
+    eventually filled even the larger queue. Slow writes may cause a playout
+    gap; never catch up by bursting stale audio into a bounded device queue.
+    """
+    step = DOWNLINK_BATCH_FRAMES
+    adpcm_state = (0, 0)
+    for index in range(0, len(output), step * FRAME_BYTES):
+        if index >= lead_batches * step * FRAME_BYTES:
+            await asyncio.sleep(step * 0.02)
+        if current_epoch() != epoch:
+            return
+        chunk = [output[start:start+FRAME_BYTES].ljust(FRAME_BYTES, b'\0')
+                 for start in range(index, min(index + step * FRAME_BYTES, len(output)), FRAME_BYTES)]
+        if codec == 'adpcm':
+            blocks = []
+            for frame in chunk:
+                block, adpcm_state = encode_adpcm_frame(frame, adpcm_state)
+                blocks.append(block)
+            payload = pack_adpcm_batch(blocks, index // FRAME_BYTES, epoch)
+        else:
+            payload = pack_audio_batch(chunk, index // FRAME_BYTES, epoch, DOWNLINK_BATCH_MAGIC)
+        await ws.send_bytes(payload)
+
+
+async def send_binary_echo(ws, echoed, epoch, codec):
+    for i in range(0, len(echoed), DOWNLINK_BATCH_FRAMES):
+        group = echoed[i:i+DOWNLINK_BATCH_FRAMES]
+        frames = [pcm for _, pcm in group]
+        if codec == 'adpcm':
+            state = (0, 0)
+            blocks = []
+            for frame in frames:
+                block, state = encode_adpcm_frame(frame, state)
+                blocks.append(block)
+            payload = pack_adpcm_batch(blocks, group[0][0], epoch)
+        else:
+            payload = pack_audio_batch(frames, group[0][0], epoch, DOWNLINK_BATCH_MAGIC)
+        await ws.send_bytes(payload)
+
+
+_SENTENCE_BOUNDARY = re.compile(r'(?<=[.!?])\s+')
+
+def split_reply_sentences(text):
+    """First sentence alone (fast first audio); later fragments grouped so the
+    TTS call count stays proportional to reply length, not punctuation."""
+    parts = [p.strip() for p in _SENTENCE_BOUNDARY.split((text or '').strip()) if p.strip()]
+    # Cap the first TTS fragment near 45 characters: TTS latency scales with
+    # clip length, and the first fragment gates the first word. Cut at the
+    # last comma inside the cap, else the last space.
+    if parts and len(parts[0]) > 50:
+        head = parts[0]
+        cut = head.rfind(',', 0, 50)
+        if cut < 20:
+            cut = head.rfind(' ', 0, 50)
+        if cut >= 20:
+            parts[0] = head[:cut].strip(' ,')
+            parts.insert(1, head[cut:].strip(' ,'))
+    if len(parts) <= 1:
+        return parts
+    rest, group = [], []
+    for p in parts[1:]:
+        group.append(p)
+        if len(' '.join(group)) >= 60:
+            rest.append(' '.join(group)); group = []
+    if group:
+        rest.append(' '.join(group))
+    return [parts[0]] + rest
 
 class Gateway:
     def __init__(self, db, agent, provider, config):
@@ -76,34 +150,42 @@ class Gateway:
                     await send({'type':'turn.result','call_id':call_id,'epoch':epoch,**cached,'replayed':True})
                     await send({'type':'turn.done','call_id':call_id,'epoch':epoch})
                     return
+                _t0 = time.monotonic()
                 text = await self.provider.transcribe(to_wav(pcm), 'audio/wav')
+                _t1 = time.monotonic()
+                LOG.warning('turn-timing stt_ms=%d', int((_t1-_t0)*1000))
                 result = await self.agent.turn(workspace, call_id, text, request_id)
+                _t2 = time.monotonic()
+                LOG.warning('turn-timing llm_ms=%d', int((_t2-_t1)*1000))
                 self.db.cache(workspace,'ws-audio:'+call_id,request_id,payload,result)
                 if buffer.epoch != epoch: return
                 await send({'type':'turn.result','call_id':call_id,'epoch':epoch, **result})
-                wav = await self.provider.speak(result['reply'], wav=True)
-                output = await resample_async(wav)
-                if binary_downlink:
-                    frames = [output[i:i+FRAME_BYTES].ljust(FRAME_BYTES, b'\0')
-                              for i in range(0, len(output), FRAME_BYTES)]
-                    step = DOWNLINK_BATCH_FRAMES
-                    for index in range(0, len(frames), step):
-                        if buffer.epoch != epoch: return
-                        chunk = frames[index:index+step]
-                        await ws.send_bytes(pack_audio_batch(
-                            chunk, index, epoch, DOWNLINK_BATCH_MAGIC))
-                        # Prime the device's jitter buffer fast (first two
-                        # batches un-paced), then pace just under real time so
-                        # the buffer keeps a cushion against radio hiccups.
-                        if index >= 2 * step:
-                            await asyncio.sleep(step * 0.02 * 0.92)
-                else:
-                    for index, start in enumerate(range(0, len(output), FRAME_BYTES)):
-                        if buffer.epoch != epoch: return
-                        frame = output[start:start+FRAME_BYTES].ljust(FRAME_BYTES, b'\0')
-                        await send({'type':'audio.output','call_id':call_id,'epoch':epoch,'seq':index,
-                                    'sample_rate':SAMPLE_RATE,'pcm16':base64.b64encode(frame).decode()})
-                        await asyncio.sleep(.02)
+                # Stream the reply sentence by sentence: first audio goes out
+                # after one short TTS call; later sentences generate while the
+                # device plays the previous ones. Same wire format, pacing
+                # continues across sentences (prime only the very first one).
+                sentences = split_reply_sentences(result['reply'])
+                if not sentences:
+                    sentences = [result['reply'] or '']
+                for sentence_index, sentence in enumerate(sentences):
+                    if buffer.epoch != epoch: return
+                    _ts = time.monotonic()
+                    wav = await self.provider.speak(sentence, wav=True)
+                    output = await resample_async(wav)
+                    LOG.warning('turn-timing tts_ms=%d sentence=%d len=%d since_start_ms=%d',
+                             int((time.monotonic()-_ts)*1000), sentence_index,
+                             len(output)//FRAME_BYTES*20, int((_ts-_t0)*1000))
+                    if downlink_codec:
+                        await send_paced_downlink(ws, output, epoch, lambda: buffer.epoch,
+                                                  downlink_codec,
+                                                  lead_batches=2 if sentence_index == 0 else 0)
+                    else:
+                        for index, start in enumerate(range(0, len(output), FRAME_BYTES)):
+                            if buffer.epoch != epoch: return
+                            frame = output[start:start+FRAME_BYTES].ljust(FRAME_BYTES, b'\0')
+                            await send({'type':'audio.output','call_id':call_id,'epoch':epoch,'seq':index,
+                                        'sample_rate':SAMPLE_RATE,'pcm16':base64.b64encode(frame).decode()})
+                            await asyncio.sleep(.02)
                 await send({'type':'turn.done','call_id':call_id,'epoch':epoch})
             except AppError as error:
                 await fail(error)
@@ -136,12 +218,9 @@ class Gateway:
                 with contextlib.suppress(Exception):
                     await stale.close(1012, 'Replaced by a newer connection')
             self.connections[did] = ws; own_connection = True
-            # callbox.v1 downlink negotiation: a device that advertises
-            # "downlink":"binary" receives TTS as CBB1 binary batches instead
-            # of one JSON audio.output per frame. Cuts per-frame overhead ~30%
-            # and messages 10x — SCO/Wi-Fi coexistence on the ESP32 needs the
-            # airtime more than it needs JSON debuggability.
-            binary_downlink = hello.get('downlink') == 'binary'
+            # Negotiated CBB1 PCM or CBB2 IMA ADPCM; unrecognised/old devices
+            # retain JSON audio.output. The codec is a per-connection choice.
+            downlink_codec = hello.get('downlink') if hello.get('downlink') in {'binary', 'adpcm'} else None
             self.db.touch_device(did)
             self.db.event(workspace, 'device.connected', 'Lab gateway connected')
             await send({'type':'ready','protocol':'callbox.v1','device_id':did,'sample_rate':SAMPLE_RATE,
@@ -193,8 +272,13 @@ class Gateway:
                         pending_frames += 1
                         if mode == 'echo':
                             buffer.take()
-                            await send({'type':'audio.output','call_id':cid,'epoch':buffer.epoch,
-                                        'seq':message['seq'],'sample_rate':SAMPLE_RATE,'pcm16':base64.b64encode(pcm).decode()})
+                            if downlink_codec:
+                                await send_binary_echo(ws, [(message['seq'], pcm)],
+                                                       buffer.epoch, downlink_codec)
+                            else:
+                                await send({'type':'audio.output','call_id':cid,'epoch':buffer.epoch,
+                                            'seq':message['seq'],'sample_rate':SAMPLE_RATE,
+                                            'pcm16':base64.b64encode(pcm).decode()})
                     elif kind == 'audio.batch':
                         frames = message['frames']
                         first_seq = message['first_seq']
@@ -205,13 +289,14 @@ class Gateway:
                             echoed.append((seq, buffer.add_pcm(pcm, seq, epoch)))
                             pending_frames += 1
                         if mode == 'echo':
-                            # Echo each logical 20 ms frame so the existing
-                            # device downlink remains protocol-compatible.
                             buffer.take()
-                            for seq, pcm in echoed:
-                                await send({'type':'audio.output','call_id':cid,'epoch':buffer.epoch,
-                                            'seq':seq,'sample_rate':SAMPLE_RATE,
-                                            'pcm16':base64.b64encode(pcm).decode()})
+                            if downlink_codec:
+                                await send_binary_echo(ws, echoed, buffer.epoch, downlink_codec)
+                            else:
+                                for seq, pcm in echoed:
+                                    await send({'type':'audio.output','call_id':cid,'epoch':buffer.epoch,
+                                                'seq':seq,'sample_rate':SAMPLE_RATE,
+                                                'pcm16':base64.b64encode(pcm).decode()})
                     elif kind == 'audio.commit':
                         if mode != 'agent': raise AppError(409, 'mode', 'Echo mode does not send audio to a model.')
                         if generation_task and not generation_task.done(): raise AppError(409,'busy','Interrupt or wait for the current turn.')
