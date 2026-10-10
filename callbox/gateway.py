@@ -9,8 +9,9 @@ import re
 import time
 from fastapi import WebSocket, WebSocketDisconnect
 from .audio import (AudioBuffer, FRAME_BYTES, SAMPLE_RATE, to_wav, resample_async,
-    unpack_audio_batch, pack_audio_batch, pack_adpcm_batch,
+    unpack_audio_batch, pack_audio_batch, pack_adpcm_batch, resample_pcm16,
     DOWNLINK_BATCH_FRAMES, DOWNLINK_BATCH_MAGIC)
+from . import realtime
 from .adpcm import encode_frame as encode_adpcm_frame
 from .errors import AppError
 
@@ -91,6 +92,126 @@ def split_reply_sentences(text):
     if group:
         rest.append(' '.join(group))
     return [parts[0]] + rest
+
+class DeviceRealtimeBridge:
+    """Makes a callbox.v1 device socket look like the browser transport that
+    realtime.run() expects. Uplink: binary CBA1 batches become JSON audio
+    messages at the wire sample rate. Downlink: realtime 24 kHz deltas are
+    resampled to 16 kHz and paced into CBB1/CBB2 batches against a single
+    epoch, so barge-in clears behave exactly like the turn-based path."""
+
+    def __init__(self, ws, epoch, codec, rate=24000, call_id=''):
+        self.ws = ws
+        self.codec = codec          # None | 'binary' | 'adpcm'
+        self.rate = rate
+        self.call_id = call_id
+        self.epoch = epoch
+        self.inbox = asyncio.Queue()
+        self.pending_play = bytearray()
+        self.play_task = None
+        self.adpcm_state = (0, 0)
+        self.closed = False
+
+    async def consume_raw(self):
+        while True:
+            event = await self.ws.receive()
+            if event.get('type') == 'websocket.disconnect':
+                await self.inbox.put(json.dumps({'type': 'end'}))
+                return
+            binary = event.get('bytes')
+            if binary is not None:
+                try:
+                    batch = unpack_audio_batch(binary)
+                except AppError:
+                    continue
+                for frame in batch['frames']:
+                    await self.inbox.put(json.dumps(
+                        {'type': 'audio', 'pcm16': base64.b64encode(frame).decode()}))
+                continue
+            raw = event.get('text')
+            if raw is None:
+                continue
+            try:
+                msg = json.loads(raw)
+            except ValueError:
+                continue
+            kind = msg.get('type')
+            if kind == 'call.end':
+                await self.inbox.put(json.dumps({'type': 'end'}))
+                return
+            if kind == 'interrupt':
+                await self.inbox.put(json.dumps({'type': 'interrupt'}))
+            elif kind == 'ping':
+                await self.inbox.put(json.dumps({'type': 'pong'}))
+            else:
+                await self.inbox.put(raw)
+
+    async def receive_text(self):
+        return await self.inbox.get()
+
+    async def _paced_send(self):
+        batches_sent = 0
+        while not self.closed:
+            n = min(DOWNLINK_BATCH_FRAMES, len(self.pending_play) // FRAME_BYTES)
+            if n == 0:
+                await asyncio.sleep(0.02)
+                continue
+            frames = []
+            for i in range(n):
+                start = i * FRAME_BYTES
+                frames.append(bytes(self.pending_play[start:start + FRAME_BYTES]).ljust(FRAME_BYTES, b'\0'))
+            del self.pending_play[:n * FRAME_BYTES]
+            if self.codec == 'adpcm':
+                blocks = []
+                for frame in frames:
+                    block, self.adpcm_state = encode_adpcm_frame(frame, self.adpcm_state)
+                    blocks.append(block)
+                payload = pack_adpcm_batch(blocks, batches_sent * n, self.epoch)
+            else:
+                payload = pack_audio_batch(frames, batches_sent * n, self.epoch, DOWNLINK_BATCH_MAGIC)
+            with contextlib.suppress(Exception):
+                await self.ws.send_bytes(payload)
+            batches_sent += 1
+            if batches_sent > 2:
+                await asyncio.sleep(DOWNLINK_BATCH_FRAMES * 0.02)
+
+    def _kick_play_task(self):
+        if not self.play_task or self.play_task.done():
+            self.play_task = asyncio.create_task(self._paced_send())
+
+    async def send_json(self, payload):
+        kind = payload.get('type')
+        if kind == 'audio':
+            pcm = base64.b64decode(payload.get('pcm16') or '')
+            pcm = pcm[:len(pcm) - len(pcm) % 2]
+            if not pcm:
+                return
+            pcm = resample_pcm16(pcm, self.rate) if self.rate != SAMPLE_RATE else pcm
+            self.pending_play.extend(pcm)
+            if len(self.pending_play) > 2_000_000:
+                del self.pending_play[:len(self.pending_play) - 1_000_000]
+            self._kick_play_task()
+        elif kind == 'playback.clear':
+            self.epoch += 1
+            self.pending_play.clear()
+            self.adpcm_state = (0, 0)
+            if self.play_task and not self.play_task.done():
+                self.play_task.cancel()
+            self.play_task = None
+            with contextlib.suppress(Exception):
+                await self.ws.send_json({'type': 'playback.clear', 'call_id': self.call_id,
+                                         'epoch': self.epoch,
+                                         'note': 'Drop queued playback.'})
+        elif kind == 'assistant.done':
+            with contextlib.suppress(Exception):
+                await self.ws.send_json({'type': 'turn.result', 'call_id': self.call_id,
+                                         'text': payload.get('text', '')})
+        elif kind == 'caller.said':
+            with contextlib.suppress(Exception):
+                await self.ws.send_json({'type': 'caller.text', 'call_id': self.call_id,
+                                         'text': payload.get('text', '')})
+        # turn.done / assistant.delta / phase / tool are agent-turn concepts;
+        # realtime mode has no commit barrier, so the device ignores them too.
 
 class Gateway:
     def __init__(self, db, agent, provider, config):
@@ -255,12 +376,35 @@ class Gateway:
                     if kind == 'call.start':
                         if cid: raise AppError(409, 'call_active', 'End the current call first.')
                         mode = message.get('mode', 'echo')
-                        if mode not in {'echo','agent'}: raise AppError(422, 'mode', 'Use echo or agent mode.')
+                        if mode not in {'echo','agent','realtime'}: raise AppError(422, 'mode', 'Use echo, agent or realtime mode.')
                         if message.get('consent') is not True: raise AppError(422,'consent_required','Use consented test calls only.')
                         call = self.agent.start(workspace, label=device['name'] + ' - lab', source='device-lab',
-                                                provider='openai' if mode == 'agent' else 'local', consent=True, device_id=did)
+                                                provider='openai-realtime' if mode == 'realtime' else ('openai' if mode == 'agent' else 'local'),
+                                                consent=True, device_id=did)
                         cid = call['id']; buffer = AudioBuffer()
                         await send({'type':'call.started','call_id':cid,'mode':mode,'epoch':buffer.epoch,'greeting':call['messages'][0]['text']})
+                        if mode == 'realtime':
+                            # Hand the socket to the realtime runtime through
+                            # the device adapter until either side ends the
+                            # call. The outer loop resumes for the next call.
+                            bridge = DeviceRealtimeBridge(
+                                ws, buffer.epoch, downlink_codec,
+                                rate=self.config.realtime_rate, call_id=cid)
+                            consumer = asyncio.create_task(bridge.consume_raw())
+                            try:
+                                await realtime.run(bridge, self.db, self.agent, self.config,
+                                                   workspace, cid, call['messages'][0]['text'],
+                                                   channel='device-lab', orchestrator=self.orchestrator)
+                            finally:
+                                consumer.cancel()
+                                with contextlib.suppress(asyncio.CancelledError, Exception):
+                                    await consumer
+                                if self.connections.get(did) is ws:
+                                    pass  # connection stays open for the next call
+                            self.db.end_call(workspace, cid)
+                            self.agent.locks.pop(cid, None)
+                            await send({'type':'call.ended','call_id':cid})
+                            cid = None
                         continue
                     if not cid: raise AppError(409, 'no_call', 'Start a call first.')
                     # Binary audio batches are connection-scoped and omit the

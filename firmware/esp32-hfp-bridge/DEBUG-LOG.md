@@ -355,3 +355,30 @@ SIP clients via CALLBOX_VOICE_RUNTIME=openai). Intermediate options
 (Groq-hosted Whisper for STT, ~0.8 s saved; Groq chat-completions for
 intent, ~1.5 s saved) shave 2-3 s at the cost of provider mixing and are
 not implemented in this PR.
+
+## Same session, later: realtime device mode + the hardware wall
+
+callbox.v1 gained a third call mode: "realtime". The gateway negotiates it at
+call.start and hands the device socket to realtime.run() through a
+DeviceRealtimeBridge adapter: uplink CBA1 batches are converted to the JSON
+audio messages the realtime pumps expect; 24 kHz realtime deltas are
+resampled to 16 kHz, buffered and paced into CBB1/CBB2 batches against the
+same epoch discipline (barge-in playback.clear bumps it exactly like the
+turn-based path). Zero device firmware changes beyond the mode string; the
+realtime runtime speaks the greeting immediately, there is no commit gate.
+250 pytest cases pass with the bridge in.
+
+Hardware validation of realtime mode is PENDING on a physical fault: after
+~25 USB replug cycles across two days the board's USB connection degraded to
+the point of power-cycling the chip (observed: the app boots — boot log
+caught mid-line at main_task — then the serial and power drop together; the
+phone never catches the BT advertisement and the WS never completes). The
+chip itself is alive (esptool syncs with connector pressure, MAC
+5c:01:3b:bf:ac:e8 reads fine). Physical checklist before the next attempt:
+replace the USB cable, wedge/press the connector during flashing and runtime,
+or move flashing to an external USB-TTL wired directly to GPIO1/GPIO3 with a
+separate supply. The download-mode trap is also documented: after any
+esptool run with --after no-reset the chip sits SILENT in the ROM bootloader
+— no BT advertisement, no logs — until a clean RST (no BOOT) or an
+esptool --after hard-reset. "Device invisible" right after a flash means
+check download mode first.
