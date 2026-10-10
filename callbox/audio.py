@@ -208,6 +208,7 @@ class AudioBuffer:
 # directions. Header: >4sBBHII = magic, count, flags, frame_bytes,
 # first_seq, epoch. Flags reserved, must be 0.
 DOWNLINK_BATCH_MAGIC = b'CBB1'
+ADPCM_BATCH_MAGIC = b'CBB2'
 DOWNLINK_BATCH_HEADER = struct.Struct('>4sBBHII')
 DOWNLINK_BATCH_FRAMES = 6  # ~120 ms of audio per WebSocket message (heap-friendly for no-PSRAM BT+WiFi)
 
@@ -219,3 +220,13 @@ def pack_audio_batch(frames, first_seq, epoch=0, magic=DOWNLINK_BATCH_MAGIC):
     header = DOWNLINK_BATCH_HEADER.pack(
         magic, len(frames), 0, FRAME_BYTES, first_seq, epoch)
     return header + b''.join(frames)
+
+
+def pack_adpcm_batch(blocks, first_seq, epoch=0):
+    from .adpcm import BLOCK_BYTES
+    if not 1 <= len(blocks) <= DOWNLINK_BATCH_FRAMES:
+        raise ValueError('invalid ADPCM batch size')
+    if any(len(block) != BLOCK_BYTES for block in blocks):
+        raise ValueError('invalid ADPCM block size')
+    return DOWNLINK_BATCH_HEADER.pack(ADPCM_BATCH_MAGIC, len(blocks), 0,
+                                      BLOCK_BYTES, first_seq, epoch) + b''.join(blocks)

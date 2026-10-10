@@ -30,6 +30,14 @@ menu "CallBox Device Configuration"
             Use these to prove HFP/SCO transmit independently before debugging
             the network bridge.
 
+    config CB_DOWNLINK_CODEC
+        string "Downlink codec: binary (PCM) or adpcm (CBB2)"
+        default "binary"
+        help
+            Use binary to compare the bounded PCM queue against the previous
+            bridge. Use adpcm to send 164-byte independent 20 ms blocks rather
+            than 640-byte PCM frames. Both use the same phone mSBC output.
+
     config CB_VAD_THRESHOLD
         int "Speech gate RMS threshold (0-32767)"
         default 900

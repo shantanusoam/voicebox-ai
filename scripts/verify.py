@@ -299,6 +299,7 @@ def hardened_gate(g, args):
 @gate('evals', 'behaviour', 'The docs/ROADMAP.md evaluation set, scored against ground truth')
 def evals_gate(g, args):
     g.run(sys.executable, 'evals/runner.py', '--report', '--quiet', name='evals/runner.py')
+    g.run(sys.executable, '-m', 'evals.downlink', name='CBB1 downlink evaluation')
     scorecard = ROOT / 'evals' / 'out' / 'scorecard.json'
     if not scorecard.exists():
         g.check('scorecard written', False, 'evals/out/scorecard.json missing')
